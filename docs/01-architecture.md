@@ -120,12 +120,30 @@ Full DDL deferred to a follow-up doc (`02-schema.md`) once this shape is confirm
 
 ## 9. Stack
 
+Every choice below optimizes for **zero idle cost and no per-seat SaaS**, scaling up only under real load — nothing here requires a standing monthly bill until there's usage to justify it.
+
 - **API**: Python, FastAPI, Pydantic v2.
-- **Orchestrator/executors**: Python async workers (built on the API's agent-loop code, not a separate language) — consider LangGraph for the graph-execution primitives rather than hand-rolling one, final call after a short spike.
-- **DB**: Postgres via Supabase (auth, RLS, storage, realtime subscriptions for live run status in the UI).
-- **Queue**: pg-boss (Postgres-backed, one less moving part than Redis) unless throughput needs prove otherwise.
-- **Frontend**: Next.js + TypeScript, React Flow for the builder canvas.
-- **Model provider**: Anthropic API (Claude) as first-class/default; adapter layer allows others later.
+- **Orchestrator/executors**: Python async workers, same codebase as the API (one language, one deploy artifact, no cross-language serialization tax). Built on **LangGraph** for the graph-execution primitives — it's free/OSS, and hand-rolling retries/checkpointing/branching is weeks of work to reinvent something battle-tested for $0 license cost.
+- **DB**: Postgres via Supabase, **free tier to start**, paused when inactive on free projects. One database does four jobs here instead of four vendors: relational data + auth + file storage + **pgvector** for any embedding/semantic-search needs (no separate Pinecone/Weaviate subscription).
+- **Queue**: pg-boss, backed by the same Postgres instance — no separate Redis service to pay for or operate.
+- **Frontend**: Next.js + TypeScript on Vercel's free/hobby tier, React Flow for the builder canvas.
+- **Sandboxed tool/code execution**: pay-per-second sandboxes (e.g. E2B, Modal) rather than keeping containers warm — cost scales exactly with actual agent runs, $0 when no one is using the platform.
+- **Hosting (API/orchestrator)**: a scale-to-zero platform (Fly.io or Render) for staging/low-traffic; move to always-on only once sustained concurrent run volume demands it.
+- **Model provider**: Anthropic API (Claude), with **cost-tiered routing** — see §9a — not a single model for every step.
+
+### 9a. LLM cost strategy (the dominant variable-cost line item)
+
+This matters more than infra choice — at any real usage volume, model tokens cost more than hosting.
+
+- **Route by task complexity, not one model for everything**:
+  - Cheap/fast model (Haiku) for classification, routing/triage nodes, input validation, and any step that's "pick A or B" rather than open-ended reasoning.
+  - Mid-tier (Sonnet) as the default workhorse for most agent nodes — best capability-per-dollar for general tool-use loops.
+  - Top-tier (Opus) only for nodes explicitly marked as needing deep multi-step planning — opt-in per agent config, not default.
+  - This routing is a property of the **Agent** config (§3), not hardcoded — each node picks its tier, the builder UI exposes it as a simple "speed/cost vs. capability" slider.
+- **Prompt caching**: system prompts, tool schemas, and marketplace-listing boilerplate are identical across many runs of the same agent — cache them (Anthropic's prompt caching) so repeat runs aren't repriced at full input-token cost.
+- **Batch API** for anything non-interactive (marketplace listing re-validation, scheduled/offline agent runs, eval suites) — roughly half the cost of synchronous calls when latency doesn't matter.
+- **Hard per-workspace token/cost budgets** (already in §7) double as a cost-control backstop, not just an abuse guard.
+- **Observability without a paid APM vendor**: the `run_steps` table (§8) already captures tokens/cost/latency per step — build a simple cost dashboard from it directly rather than paying for Datadog/Langfuse Cloud. Self-hosted Langfuse (OSS) is a fallback if the in-house dashboard isn't enough, still $0 license cost.
 
 ## 10. Phased roadmap
 
@@ -136,6 +154,7 @@ Full DDL deferred to a follow-up doc (`02-schema.md`) once this shape is confirm
 ## 11. Open decisions (need your input before/while building)
 
 1. Multi-tenant from day one, or single-workspace MVP first? (Affects whether RLS/workspace scoping is built now or retrofitted.)
-2. Self-hosted LLM cost pass-through vs. platform-subsidized — affects run budget design in §7.
+2. Self-hosted LLM cost pass-through vs. platform-subsidized — affects run budget design in §7 and the per-workspace defaults in §9a.
 3. Does "another agent as a tool" need approval at *build* time or just declared capability — security/UX tradeoff.
-4. LangGraph vs. hand-rolled graph executor — worth a half-day spike before committing.
+
+~~4. LangGraph vs. hand-rolled graph executor~~ — resolved: LangGraph (§9), free OSS, avoids reinventing checkpointing/retries.
