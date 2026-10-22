@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 
 from app.db import close_pool
-from app.routers import agents, listings, runs
+from app.routers import agent_versions, agents, listings, runs, tools
 
 app = FastAPI(title="Agent Ecosystem API")
 
 app.include_router(agents.router)
+app.include_router(agent_versions.router)
+app.include_router(tools.router)
 app.include_router(runs.router)
 app.include_router(listings.router)
 

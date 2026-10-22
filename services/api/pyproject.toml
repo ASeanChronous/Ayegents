@@ -9,6 +9,7 @@ dependencies = [
   "pydantic-settings>=2.5",
   "asyncpg>=0.30",
   "anthropic>=0.40",
+  "cryptography>=43.0",
 ]
 
 [project.optional-dependencies]

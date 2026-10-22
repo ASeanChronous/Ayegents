@@ -8,6 +8,7 @@ race on the same run.
 """
 
 import asyncio
+import json
 import logging
 
 import asyncpg
@@ -17,6 +18,14 @@ from app.executor import run_single_agent
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("orchestrator")
+
+
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    # See services/api/app/db.py — same asyncpg jsonb-codec requirement.
+    for pg_type in ("jsonb", "json"):
+        await conn.set_type_codec(
+            pg_type, encoder=json.dumps, decoder=json.loads, schema="pg_catalog", format="text"
+        )
 
 
 async def claim_next_run(pool: asyncpg.Pool) -> asyncpg.Record | None:
@@ -48,7 +57,7 @@ async def process_run(pool: asyncpg.Pool, run_id) -> None:
 
 
 async def main() -> None:
-    pool = await asyncpg.create_pool(settings.database_url)
+    pool = await asyncpg.create_pool(settings.database_url, init=_init_connection)
     log.info("orchestrator %s started, polling every %.1fs", settings.worker_id, settings.poll_interval_seconds)
     try:
         while True:
