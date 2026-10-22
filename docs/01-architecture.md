@@ -93,7 +93,7 @@ Why a separate Orchestrator from the API: run execution is long-running, retryab
 - **Multi-agent run**: a Flow with multiple agent nodes. The orchestrator walks the compiled graph; each agent node's output is mapped to the next node's input per the edge config. Supports:
   - **Sequential handoff** (pipeline): A → B → C.
   - **Parallel fan-out/fan-in**: one node triggers N agent nodes concurrently, merge node waits on all/any.
-  - **Agent-as-tool**: an agent can call another agent synchronously as if it were a tool (for sub-task delegation), capped at a configurable recursion depth to prevent runaway loops.
+  - **Agent-as-tool**: an agent can call another agent synchronously as if it were a tool (for sub-task delegation), capped at a configurable recursion depth to prevent runaway loops. Permission model: **declared capability only** — the flow spec marks the sub-agent dependency (same mechanism as the marketplace's tool-category declarations in §6), no separate build/publish-time approval step. One consistent permission model instead of two.
 - State: each Run persists a step log (agent/tool, input, output, tokens, latency, error) to Postgres as it executes — not just a final result — so a run is inspectable/resumable mid-flight.
 - Model-provider abstraction: thin adapter layer so the engine isn't hard-wired to one provider, but Claude is the default/first-class target.
 
@@ -108,8 +108,8 @@ Why a separate Orchestrator from the API: run execution is long-running, retryab
 ## 7. Security & sandboxing
 
 - Agent tool execution never runs in the API or orchestrator process. Each run's tool calls go through a **Tool Gateway**: allow-listed egress, per-workspace secrets injected at call time (never exposed to the agent's own context), and code-exec tools (if offered) run in a disposable container with no network by default.
-- Per-workspace RLS in Postgres: every table scoped by `workspace_id`, mirroring the TradersEdge RLS pattern already in use.
-- Run budgets: max steps, max tokens, max wall-clock time, max concurrent runs — enforced per workspace tier, hard-stop with a logged reason, not a silent timeout.
+- Per-workspace RLS in Postgres: every table scoped by `workspace_id` — **multi-tenant from day one** (resolved, see §12), mirroring the TradersEdge RLS pattern already in use. Built in now rather than retrofitted once real users/data exist.
+- Run budgets: max steps, max tokens, max wall-clock time, max concurrent runs — enforced per workspace tier. Cost model is **platform-subsidized flat tiers** (resolved, see §12): the platform pays the Anthropic bill, so these budgets are the margin-protection mechanism, not just an abuse guard — hard-stop with a logged reason, not a silent timeout, when a tier's cap is hit.
 - Marketplace installs never carry the publisher's credentials forward (see §6).
 
 ## 8. Data model (initial sketch)
@@ -147,14 +147,17 @@ This matters more than infra choice — at any real usage volume, model tokens c
 
 ## 10. Phased roadmap
 
-- **MVP**: single-agent builder (no multi-agent yet), manual trigger only, no marketplace — prove the agent config → run → inspect loop end-to-end.
-- **V1**: multi-agent flows (sequential + agent-as-tool), webhook/schedule triggers, marketplace (free listings, install/fork model).
-- **V2**: parallel fan-out/fan-in, monetized listings, more triggers, usage-based billing.
+- **MVP**: multi-tenant from the start (workspaces + RLS, §7/§12), single-agent builder (no multi-agent yet), manual trigger only, no marketplace, flat subsidized free/pro tiers with hard run budgets — prove the agent config → run → inspect loop end-to-end.
+- **V1**: multi-agent flows (sequential + agent-as-tool, declared-capability permission model), webhook/schedule triggers, marketplace (free listings, install/fork model).
+- **V2**: parallel fan-out/fan-in, monetized marketplace listings, more triggers. Revisit the cost model only if usage patterns show flat tiers are mis-priced (§12) — add metering/pass-through then, not before.
 
 ## 11. Open decisions (need your input before/while building)
 
-1. Multi-tenant from day one, or single-workspace MVP first? (Affects whether RLS/workspace scoping is built now or retrofitted.)
-2. Self-hosted LLM cost pass-through vs. platform-subsidized — affects run budget design in §7 and the per-workspace defaults in §9a.
-3. Does "another agent as a tool" need approval at *build* time or just declared capability — security/UX tradeoff.
+None remaining — the three raised in the prior draft are resolved; see §12.
 
-~~4. LangGraph vs. hand-rolled graph executor~~ — resolved: LangGraph (§9), free OSS, avoids reinventing checkpointing/retries.
+## 12. Resolved decisions log
+
+1. **Multi-tenancy**: multi-tenant from day one. Retrofitting workspace scoping after real data exists is a far more expensive migration than building it in now, and the pattern is already proven in the TradersEdge RLS design.
+2. **LLM cost model**: platform-subsidized flat tiers. The platform pays the Anthropic bill; free/pro tiers get a fixed run-budget cap (§7) instead of per-token billing. Simplest to launch — no Stripe metering/usage-dashboard build required for MVP. Trade-off: margin depends on the caps being set correctly, so budgets need real usage data to tune — revisit only if usage shows the flat tiers are mis-priced (§10 V2), not preemptively.
+3. **Agent-as-tool permission**: declared capability only, no separate build/publish-time approval (§5). Matches the marketplace's existing tool-category declaration pattern (§6) — one permission model, not two.
+4. **Graph executor**: LangGraph over hand-rolled (§9) — free OSS, avoids reinventing checkpointing/retries.
