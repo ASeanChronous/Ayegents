@@ -1,0 +1,5 @@
+{
+  "name": "agent-ecosystem",
+  "private": true,
+  "workspaces": ["apps/*"]
+}
