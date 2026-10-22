@@ -16,6 +16,11 @@ class ToolCreate(BaseModel):
     kind: str  # 'builtin' | 'http' | 'code_exec' | 'agent'
     config_schema: dict = {}  # the input schema the MODEL fills when calling this tool
     requires_credential: bool = False
+    # Egress allow-list (orchestrator_app/tool_gateway.py _check_host_allowed
+    # for http, E2B's network.allow_out for code_exec). None/omitted =
+    # unrestricted. Set at tool-creation time, not in agent_version_tools.config
+    # -- see migration 0004 for why that distinction matters.
+    allowed_hosts: list[str] | None = None
 
 
 class ToolOut(BaseModel):
@@ -24,6 +29,7 @@ class ToolOut(BaseModel):
     name: str
     kind: str
     requires_credential: bool
+    allowed_hosts: list[str] | None
 
 
 @router.get("", response_model=list[ToolOut])
@@ -31,7 +37,7 @@ async def list_tools(workspace_id: UUID, user_id: UUID = Depends(get_current_use
     pool = await get_pool()
     rows = await pool.fetch(
         """
-        select id, key, name, kind, requires_credential from tools
+        select id, key, name, kind, requires_credential, allowed_hosts from tools
         where workspace_id is null or workspace_id = $1
         order by name
         """,
@@ -45,9 +51,9 @@ async def create_tool(workspace_id: UUID, body: ToolCreate, user_id: UUID = Depe
     pool = await get_pool()
     row = await pool.fetchrow(
         """
-        insert into tools (workspace_id, key, name, kind, config_schema, requires_credential)
-        values ($1, $2, $3, $4, $5, $6)
-        returning id, key, name, kind, requires_credential
+        insert into tools (workspace_id, key, name, kind, config_schema, requires_credential, allowed_hosts)
+        values ($1, $2, $3, $4, $5, $6, $7)
+        returning id, key, name, kind, requires_credential, allowed_hosts
         """,
         workspace_id,
         body.key,
@@ -55,6 +61,7 @@ async def create_tool(workspace_id: UUID, body: ToolCreate, user_id: UUID = Depe
         body.kind,
         body.config_schema,
         body.requires_credential,
+        body.allowed_hosts,
     )
     return ToolOut(**dict(row))
 

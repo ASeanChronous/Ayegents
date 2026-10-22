@@ -1,17 +1,20 @@
 """Tool Gateway — the only place a tool call actually executes.
 
 Every dispatch goes through here rather than inline in the response-handling
-loop, so credential decryption, the agent-as-tool recursion cap, and (later)
-egress allow-listing all live in one spot (architecture doc §7).
+loop, so credential decryption, the agent-as-tool recursion cap, and egress
+allow-listing all live in one spot (architecture doc §7).
 
-TODO: egress allow-listing for `http` tools isn't implemented yet — any URL
-in the tool's config is called as-is. Needed before this handles untrusted
-marketplace-installed tools. The code_exec sandbox below has the same gap:
-E2B sandboxes have outbound internet access by default and this doesn't
-restrict it — architecture doc §7's "no network by default" isn't enforced
-yet, it needs a custom E2B template with egress locked down.
+Egress allow-listing (tools.allowed_hosts, migration 0004) is enforced two
+different ways since there's no mechanism that covers both tool kinds:
+`http` tools get an application-level hostname check before the request is
+made (_check_host_allowed); `code_exec` tools pass the same host list to
+E2B's own sandbox-level network firewall (network.allow_out), which is
+enforced by E2B's infrastructure, not by this code, and only understands
+literal hostnames/CIDRs/IPs — not the "*.example.com" wildcard the http
+check supports.
 """
 
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import asyncpg
@@ -59,8 +62,26 @@ async def dispatch_tool(
             depth=depth,
         )
     if kind == "code_exec":
-        return await _dispatch_code_exec(config, tool_input)
+        return await _dispatch_code_exec(tool, config, tool_input)
     raise ToolDispatchError(f"unknown tool kind: {kind!r}")
+
+
+def _check_host_allowed(hostname: str, allowed_hosts: list[str] | None) -> None:
+    """None/empty allowed_hosts = unrestricted (unchanged default for every
+    tool created before migration 0004). A pattern of "*.example.com"
+    matches any subdomain (but not example.com itself — list it separately
+    if that's wanted too); anything else must match the hostname exactly."""
+    if not allowed_hosts:
+        return
+    for pattern in allowed_hosts:
+        if pattern.startswith("*."):
+            if hostname.endswith("." + pattern[2:]):
+                return
+        elif hostname == pattern:
+            return
+    raise ToolDispatchError(
+        f"host {hostname!r} is not in this tool's allowed_hosts list {allowed_hosts!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +124,10 @@ async def _dispatch_http(
     url = config.get("url")
     if not url:
         raise ToolDispatchError("http tool config is missing 'url'")
+    hostname = urlsplit(url).hostname
+    if not hostname:
+        raise ToolDispatchError(f"http tool config has an unparseable url: {url!r}")
+    _check_host_allowed(hostname, tool["allowed_hosts"])
     method = config.get("method", "GET").upper()
     headers = dict(config.get("headers", {}))
 
@@ -131,7 +156,7 @@ async def _dispatch_http(
 # ---------------------------------------------------------------------------
 
 
-async def _dispatch_code_exec(config: dict, tool_input: dict) -> dict:
+async def _dispatch_code_exec(tool: asyncpg.Record, config: dict, tool_input: dict) -> dict:
     code = tool_input.get("code")
     if not code:
         raise ToolDispatchError("code_exec tool call is missing 'code'")
@@ -146,6 +171,16 @@ async def _dispatch_code_exec(config: dict, tool_input: dict) -> dict:
     create_kwargs = {"api_key": settings.e2b_api_key, "timeout": timeout_seconds}
     if config.get("template"):
         create_kwargs["template"] = config["template"]
+    allowed_hosts = tool["allowed_hosts"]
+    if allowed_hosts:
+        # Enforced by E2B's own sandbox firewall, not by this process — the
+        # sandbox can reach only these hosts for its entire lifetime, no
+        # matter what the executed code tries. "*.example.com" wildcards
+        # (supported by _check_host_allowed for http tools) are NOT expanded
+        # here; E2B's allow_out wants literal hostnames/CIDRs/IPs, so a
+        # wildcard pattern is passed through as-is and almost certainly
+        # won't match anything — list exact hostnames for code_exec tools.
+        create_kwargs["network"] = {"allow_out": list(allowed_hosts)}
 
     sandbox = await AsyncSandbox.create(**create_kwargs)
     try:

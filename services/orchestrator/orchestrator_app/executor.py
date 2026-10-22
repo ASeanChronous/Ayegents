@@ -116,7 +116,7 @@ async def _load_current_version(conn: asyncpg.Connection, agent_id: UUID) -> asy
 async def _load_tools(conn: asyncpg.Connection, agent_version_id: UUID) -> list[dict]:
     rows = await conn.fetch(
         """
-        select t.id, t.key, t.name, t.kind, t.config_schema, t.requires_credential, avt.config
+        select t.id, t.key, t.name, t.kind, t.config_schema, t.requires_credential, t.allowed_hosts, avt.config
         from agent_version_tools avt
         join tools t on t.id = avt.tool_id
         where avt.agent_version_id = $1

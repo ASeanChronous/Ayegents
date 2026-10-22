@@ -33,13 +33,16 @@ multi-agent flows. Both are tested against a real Postgres + mocked Claude respo
   queries at once, found by testing a real concurrent fan-out, not by inspection), and
   conditional branching (a tiny `"<node_id>.output.<key>"` condition language, including a
   fallback that parses an agent's JSON-formatted reply when the condition needs to read it).
+- **Egress allow-listing** (`tools.allowed_hosts`, migration `0004`): set at tool-creation
+  time (`POST /workspaces/{id}/tools`), not in the per-agent config that supplies the actual
+  URL — that distinction matters once marketplace installs exist, since config is exactly
+  what an untrusted listing would control. `http` tools get an application-level hostname
+  check (exact match or `*.example.com` wildcard); `code_exec` tools pass the same host list
+  to E2B's own sandbox firewall (`network.allow_out`), enforced by E2B's infrastructure, not
+  by this code. None/empty stays unrestricted (unchanged default for every existing tool).
 
 Not yet implemented:
 
-- Egress allow-listing/restriction for `http` and `code_exec` tools (any URL in an `http`
-  tool's config is called as-is; E2B sandboxes have outbound internet access by default and
-  this doesn't restrict it — architecture doc §7's "no network by default" needs a custom
-  E2B template, not yet built)
 - Flow checkpointing/resume — a flow run executes as one in-memory LangGraph `ainvoke` call;
   an orchestrator crash mid-flow loses the run, same as every other run in this scaffold
 - A richer condition language (comparisons, arithmetic) — today's is lookup + truthiness only
@@ -54,7 +57,7 @@ e.g. via `pyenv` or `uv`, before setting up the services below) and Node 20+ (al
 satisfied here).
 
 1. **Database**: create a Supabase project (or run `supabase start` locally with the CLI),
-   then apply the `supabase/migrations/*.sql` files in order (`0001` through `0003`).
+   then apply the `supabase/migrations/*.sql` files in order (`0001` through `0004`).
 2. **Env**: copy `.env.example` to `services/api/.env` and `services/orchestrator/.env`,
    filling in `DATABASE_URL` and `ANTHROPIC_API_KEY`. Generate `ENCRYPTION_KEY` once (see the
    comment in `.env.example`) and use the *same* value in both files — the API encrypts tool

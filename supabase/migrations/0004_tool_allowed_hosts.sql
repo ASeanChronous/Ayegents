@@ -1,0 +1,21 @@
+-- Egress allow-list, enforced at dispatch time in
+-- services/orchestrator/orchestrator_app/tool_gateway.py.
+--
+-- Lives on `tools` (the definition), not on agent_version_tools.config (the
+-- per-agent attachment) -- config is where a tool's actual URL/args come
+-- from, and once marketplace installs exist (docs/01-architecture.md §6),
+-- config is exactly the part a malicious or compromised listing controls.
+-- The allow-list has to live somewhere that trust boundary can't reach: a
+-- tool row is created directly by the workspace that owns it (or by a
+-- migration, for global tools) -- never created implicitly by installing
+-- someone else's listing -- so it stays outside that boundary.
+--
+-- null/empty = unrestricted (today's behavior, unchanged for every
+-- already-seeded tool). A non-empty list is enforced two different ways
+-- depending on tool kind, since there's no single mechanism that covers
+-- both: `http` tools get an application-level hostname check (exact match
+-- or "*.example.com" subdomain wildcard); `code_exec` tools pass the same
+-- list straight to E2B's own `network.allow_out` sandbox firewall, which
+-- only understands literal hostnames/CIDRs/IPs, not our wildcard syntax.
+
+alter table tools add column allowed_hosts text[];
