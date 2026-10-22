@@ -6,7 +6,10 @@ egress allow-listing all live in one spot (architecture doc §7).
 
 TODO: egress allow-listing for `http` tools isn't implemented yet — any URL
 in the tool's config is called as-is. Needed before this handles untrusted
-marketplace-installed tools.
+marketplace-installed tools. The code_exec sandbox below has the same gap:
+E2B sandboxes have outbound internet access by default and this doesn't
+restrict it — architecture doc §7's "no network by default" isn't enforced
+yet, it needs a custom E2B template with egress locked down.
 """
 
 from uuid import UUID
@@ -14,6 +17,7 @@ from uuid import UUID
 import asyncpg
 import httpx
 
+from orchestrator_app.config import settings
 from orchestrator_app.secrets import decrypt_secret
 
 MAX_AGENT_TOOL_DEPTH = 5
@@ -55,9 +59,7 @@ async def dispatch_tool(
             depth=depth,
         )
     if kind == "code_exec":
-        raise ToolDispatchError(
-            "code_exec tools are not implemented yet (needs a sandboxed runner, e.g. E2B)"
-        )
+        return await _dispatch_code_exec(config, tool_input)
     raise ToolDispatchError(f"unknown tool kind: {kind!r}")
 
 
@@ -121,6 +123,46 @@ async def _dispatch_http(
     if "application/json" in resp.headers.get("content-type", ""):
         return resp.json()
     return {"text": resp.text}
+
+
+# ---------------------------------------------------------------------------
+# code_exec tools — pay-per-use sandboxes (E2B), not warm containers
+# (architecture doc §9: cost scales with actual runs, $0 when idle)
+# ---------------------------------------------------------------------------
+
+
+async def _dispatch_code_exec(config: dict, tool_input: dict) -> dict:
+    code = tool_input.get("code")
+    if not code:
+        raise ToolDispatchError("code_exec tool call is missing 'code'")
+    if not settings.e2b_api_key:
+        raise ToolDispatchError(
+            "code_exec tool was called but E2B_API_KEY is not configured on this orchestrator"
+        )
+
+    from e2b_code_interpreter import AsyncSandbox
+
+    timeout_seconds = config.get("timeout_seconds", 30)
+    create_kwargs = {"api_key": settings.e2b_api_key, "timeout": timeout_seconds}
+    if config.get("template"):
+        create_kwargs["template"] = config["template"]
+
+    sandbox = await AsyncSandbox.create(**create_kwargs)
+    try:
+        execution = await sandbox.run_code(code, timeout=timeout_seconds)
+    finally:
+        # Disposable per call — no state (filesystem, installed packages, running
+        # processes) ever survives from one tool call to the next.
+        await sandbox.kill()
+
+    if execution.error:
+        raise ToolDispatchError(f"{execution.error.name}: {execution.error.value}")
+
+    return {
+        "stdout": "".join(execution.logs.stdout),
+        "stderr": "".join(execution.logs.stderr),
+        "results": [r.text for r in execution.results if getattr(r, "text", None)],
+    }
 
 
 async def _load_credential_secret(conn: asyncpg.Connection, *, tool_id: UUID, workspace_id: UUID) -> str:

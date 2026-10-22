@@ -24,8 +24,10 @@ system prompt + attached tools, enqueue a run, the orchestrator executes the Cla
 tool-use loop and dispatches `builtin`/`http`/`agent` tool calls through the Tool Gateway,
 every model/tool call lands in `run_steps`. Not yet implemented:
 
-- `code_exec` tools (stubbed in `tool_gateway.py` — needs a sandboxed runner, e.g. E2B)
-- Egress allow-listing for `http` tools (any URL in a tool's config is called as-is)
+- Egress allow-listing/restriction for `http` and `code_exec` tools (any URL in an `http`
+  tool's config is called as-is; E2B sandboxes have outbound internet access by default and
+  this doesn't restrict it — architecture doc §7's "no network by default" needs a custom
+  E2B template, not yet built)
 - Multi-agent *flow* execution via LangGraph (sequential/parallel fan-out) — agent-as-tool
   works today, but only as a direct call, not as a node in a larger flow graph
 - Auth (`services/api/app/deps.py` stubs the current-user lookup via a header instead of
@@ -39,11 +41,12 @@ e.g. via `pyenv` or `uv`, before setting up the services below) and Node 20+ (al
 satisfied here).
 
 1. **Database**: create a Supabase project (or run `supabase start` locally with the CLI),
-   then apply `supabase/migrations/0001_init_schema.sql` and `0002_seed_builtin_tools.sql` in order.
+   then apply the `supabase/migrations/*.sql` files in order (`0001` through `0003`).
 2. **Env**: copy `.env.example` to `services/api/.env` and `services/orchestrator/.env`,
    filling in `DATABASE_URL` and `ANTHROPIC_API_KEY`. Generate `ENCRYPTION_KEY` once (see the
    comment in `.env.example`) and use the *same* value in both files — the API encrypts tool
-   credentials with it, the orchestrator decrypts them.
+   credentials with it, the orchestrator decrypts them. `E2B_API_KEY` (orchestrator only) is
+   needed only if an agent has the `run_python` code_exec tool attached.
 3. **API**:
    ```bash
    cd services/api && python3.11 -m venv .venv && source .venv/bin/activate
