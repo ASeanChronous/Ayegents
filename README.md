@@ -9,7 +9,7 @@ Design docs: [`docs/01-architecture.md`](docs/01-architecture.md), [`docs/02-sch
 ```
 apps/web/            Next.js frontend — builder UI, marketplace, run inspector
 services/api/         FastAPI — CRUD for agents/flows/runs/listings, enqueues runs
-services/orchestrator/ Polls the Postgres job queue, runs the Claude tool-use loop per agent
+services/orchestrator/ Polls the Postgres job queue, runs single-agent and multi-agent-flow runs
 supabase/migrations/   Schema + RLS, matches docs/02-schema.md exactly
 ```
 
@@ -19,17 +19,30 @@ the cost-efficiency stack in `docs/01-architecture.md` §9.
 
 ## Status
 
-Scaffold only — proves the shape of the MVP loop: create an agent, create a version with a
-system prompt + attached tools, enqueue a run, the orchestrator executes the Claude
-tool-use loop and dispatches `builtin`/`http`/`agent` tool calls through the Tool Gateway,
-every model/tool call lands in `run_steps`. Not yet implemented:
+Scaffold only — proves the shape of the MVP loop (single-agent runs, tool dispatch) and V1's
+multi-agent flows. Both are tested against a real Postgres + mocked Claude responses (no
+`ANTHROPIC_API_KEY` is available in this dev environment):
+
+- **Single-agent**: create an agent, create a version with a system prompt + attached
+  tools, enqueue a run, the orchestrator executes the Claude tool-use loop and dispatches
+  `builtin`/`http`/`code_exec`/`agent` tool calls through the Tool Gateway, every model/tool
+  call lands in `run_steps`.
+- **Multi-agent flows** (`flow_executor.py`, built on LangGraph): a flow spec's nodes/edges
+  compile into a graph supporting sequential handoff, parallel fan-out/fan-in (each
+  concurrent branch gets its own pooled DB connection — a single connection can't serve two
+  queries at once, found by testing a real concurrent fan-out, not by inspection), and
+  conditional branching (a tiny `"<node_id>.output.<key>"` condition language, including a
+  fallback that parses an agent's JSON-formatted reply when the condition needs to read it).
+
+Not yet implemented:
 
 - Egress allow-listing/restriction for `http` and `code_exec` tools (any URL in an `http`
   tool's config is called as-is; E2B sandboxes have outbound internet access by default and
   this doesn't restrict it — architecture doc §7's "no network by default" needs a custom
   E2B template, not yet built)
-- Multi-agent *flow* execution via LangGraph (sequential/parallel fan-out) — agent-as-tool
-  works today, but only as a direct call, not as a node in a larger flow graph
+- Flow checkpointing/resume — a flow run executes as one in-memory LangGraph `ainvoke` call;
+  an orchestrator crash mid-flow loses the run, same as every other run in this scaffold
+- A richer condition language (comparisons, arithmetic) — today's is lookup + truthiness only
 - Auth (`services/api/app/deps.py` stubs the current-user lookup via a header instead of
   verifying a Supabase JWT)
 - Marketplace install/fork flow, the visual flow builder UI

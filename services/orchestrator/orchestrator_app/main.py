@@ -15,6 +15,7 @@ import asyncpg
 
 from orchestrator_app.config import settings
 from orchestrator_app.executor import run_single_agent
+from orchestrator_app.flow_executor import run_flow
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("orchestrator")
@@ -52,7 +53,21 @@ async def claim_next_run(pool: asyncpg.Pool) -> asyncpg.Record | None:
 
 async def process_run(pool: asyncpg.Pool, run_id) -> None:
     async with pool.acquire() as conn:
-        await run_single_agent(conn, run_id)
+        run = await conn.fetchrow("select flow_id from runs where id = $1", run_id)
+        is_flow = run["flow_id"] is not None
+        if not is_flow:
+            # runs.run_is_flow_xor_agent (0001_init_schema.sql) guarantees
+            # exactly one of flow_id/agent_id is set.
+            await run_single_agent(conn, run_id)
+
+    if is_flow:
+        # run_flow manages its own connections (acquiring one per concurrent
+        # flow branch, see flow_executor.py) rather than using the one above —
+        # a single connection can't serve two queries from parallel branches
+        # at once.
+        await run_flow(pool, run_id)
+
+    async with pool.acquire() as conn:
         await conn.execute("delete from run_queue where run_id = $1", run_id)
 
 

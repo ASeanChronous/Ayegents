@@ -7,11 +7,13 @@ per model/tool call as it goes — so a run is inspectable mid-flight, not just
 at completion (architecture doc §5).
 
 Multi-agent *flow* execution (sequential handoff, parallel fan-out/fan-in via
-LangGraph, §9) still isn't implemented — this only covers a standalone agent
-run and the agent-as-tool case, both of which share `_execute_agent_loop`.
+LangGraph) lives in flow_executor.py and reuses `_execute_agent_loop` for its
+agent nodes — this module covers a standalone single-agent run and the
+agent-as-tool case.
 """
 
 import time
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 import asyncpg
@@ -132,6 +134,27 @@ async def _next_step_index(conn: asyncpg.Connection, run_id: UUID) -> int:
     return row["next"]
 
 
+@asynccontextmanager
+async def _run_step_lock(conn: asyncpg.Connection, run_id: UUID):
+    """Postgres advisory lock scoped to this run_id, held across step_index
+    allocation and the run_steps insert that uses it.
+
+    A flow's fan-out branches (flow_executor.py) run concurrently on
+    *separate* connections, so "read max(step_index), then insert" is a
+    check-then-act race: two branches can read the same max and then both
+    try to insert the same (run_id, step_index), colliding with run_steps'
+    unique constraint. This isn't hypothetical — it reproduced reliably
+    under a real concurrent fan-out test. The lock serializes allocation
+    per run without needing a DB-level sequence per run.
+    """
+    key = await conn.fetchval("select hashtext($1::text)", str(run_id))
+    await conn.execute("select pg_advisory_lock($1)", key)
+    try:
+        yield
+    finally:
+        await conn.execute("select pg_advisory_unlock($1)", key)
+
+
 async def _execute_agent_loop(
     conn: asyncpg.Connection,
     *,
@@ -141,6 +164,7 @@ async def _execute_agent_loop(
     messages: list[dict],
     max_steps: int,
     depth: int,
+    node_id: str | None = None,
 ) -> tuple[str, dict, int]:
     model_id = resolve_model_id(agent_version["model_tier"])
     tool_rows = await _load_tools(conn, agent_version["id"])
@@ -170,24 +194,25 @@ async def _execute_agent_loop(
             assistant_content = [block.model_dump() for block in response.content]
             messages.append({"role": "assistant", "content": assistant_content})
 
-            step_index = await _next_step_index(conn, run_id)
-            await conn.execute(
-                """
-                insert into run_steps
-                    (run_id, step_index, kind, agent_id, node_id, input, output,
-                     tokens_input, tokens_output, latency_ms, status)
-                values ($1, $2, 'agent_call', $3, $4, $5, $6, $7, $8, $9, 'succeeded')
-                """,
-                run_id,
-                step_index,
-                agent_version["agent_id"],
-                f"depth:{depth}",
-                {"messages": messages[:-1]},
-                {"content": assistant_content},
-                response.usage.input_tokens,
-                response.usage.output_tokens,
-                latency_ms,
-            )
+            async with _run_step_lock(conn, run_id):
+                step_index = await _next_step_index(conn, run_id)
+                await conn.execute(
+                    """
+                    insert into run_steps
+                        (run_id, step_index, kind, agent_id, node_id, input, output,
+                         tokens_input, tokens_output, latency_ms, status)
+                    values ($1, $2, 'agent_call', $3, $4, $5, $6, $7, $8, $9, 'succeeded')
+                    """,
+                    run_id,
+                    step_index,
+                    agent_version["agent_id"],
+                    node_id or f"depth:{depth}",
+                    {"messages": messages[:-1]},
+                    {"content": assistant_content},
+                    response.usage.input_tokens,
+                    response.usage.output_tokens,
+                    latency_ms,
+                )
 
             if response.stop_reason != "tool_use":
                 final_text = "".join(
@@ -229,11 +254,10 @@ async def _dispatch_and_log(
     tool_input: dict,
 ) -> dict:
     started = time.monotonic()
-    step_index = await _next_step_index(conn, run_id)
 
     if tool is None:
         error = f"agent has no tool attached for {tool_name!r}"
-        await _log_tool_step(conn, run_id, step_index, None, tool_input, {"error": error}, started, "failed", error)
+        await _log_tool_step(conn, run_id, None, tool_input, {"error": error}, started, "failed", error)
         return {"type": "tool_result", "tool_use_id": tool_use_id, "content": error, "is_error": True}
 
     try:
@@ -246,26 +270,32 @@ async def _dispatch_and_log(
             run_id=run_id,
             depth=depth + 1,
         )
-        await _log_tool_step(conn, run_id, step_index, tool["id"], tool_input, result, started, "succeeded", None)
+        await _log_tool_step(conn, run_id, tool["id"], tool_input, result, started, "succeeded", None)
         return {"type": "tool_result", "tool_use_id": tool_use_id, "content": str(result)}
     except ToolDispatchError as exc:
-        await _log_tool_step(conn, run_id, step_index, tool["id"], tool_input, {"error": str(exc)}, started, "failed", str(exc))
+        await _log_tool_step(conn, run_id, tool["id"], tool_input, {"error": str(exc)}, started, "failed", str(exc))
         return {"type": "tool_result", "tool_use_id": tool_use_id, "content": str(exc), "is_error": True}
 
 
-async def _log_tool_step(conn, run_id, step_index, tool_id, tool_input, output, started, status, error) -> None:
+async def _log_tool_step(conn, run_id, tool_id, tool_input, output, started, status, error) -> None:
+    """Allocates step_index and inserts atomically (see _run_step_lock) —
+    index allocation deliberately happens here, right before the insert,
+    not before the (possibly slow, e.g. a real HTTP call or E2B sandbox)
+    tool dispatch that already ran by the time this is called."""
     latency_ms = int((time.monotonic() - started) * 1000)
-    await conn.execute(
-        """
-        insert into run_steps (run_id, step_index, kind, tool_id, input, output, latency_ms, status, error)
-        values ($1, $2, 'tool_call', $3, $4, $5, $6, $7, $8)
-        """,
-        run_id,
-        step_index,
-        tool_id,
-        {"input": tool_input},
-        output,
-        latency_ms,
-        status,
-        error,
-    )
+    async with _run_step_lock(conn, run_id):
+        step_index = await _next_step_index(conn, run_id)
+        await conn.execute(
+            """
+            insert into run_steps (run_id, step_index, kind, tool_id, input, output, latency_ms, status, error)
+            values ($1, $2, 'tool_call', $3, $4, $5, $6, $7, $8)
+            """,
+            run_id,
+            step_index,
+            tool_id,
+            {"input": tool_input},
+            output,
+            latency_ms,
+            status,
+            error,
+        )
