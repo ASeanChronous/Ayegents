@@ -14,7 +14,7 @@ from uuid import UUID
 import asyncpg
 import httpx
 
-from app.secrets import decrypt_secret
+from orchestrator_app.secrets import decrypt_secret
 
 MAX_AGENT_TOOL_DEPTH = 5
 
@@ -44,7 +44,7 @@ async def dispatch_tool(
             raise ToolDispatchError(
                 f"agent-as-tool recursion depth exceeded ({MAX_AGENT_TOOL_DEPTH})"
             )
-        from app.executor import run_agent_as_tool  # local import: avoids a circular import
+        from orchestrator_app.executor import run_agent_as_tool  # local import: avoids a circular import
 
         sub_agent_id = UUID(config["sub_agent_id"])
         return await run_agent_as_tool(

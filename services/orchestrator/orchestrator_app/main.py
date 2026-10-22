@@ -13,8 +13,8 @@ import logging
 
 import asyncpg
 
-from app.config import settings
-from app.executor import run_single_agent
+from orchestrator_app.config import settings
+from orchestrator_app.executor import run_single_agent
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("orchestrator")

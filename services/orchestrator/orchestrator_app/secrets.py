@@ -8,7 +8,7 @@ its twin in services/api) is the only code that ever touches plaintext.
 
 from cryptography.fernet import Fernet
 
-from app.config import settings
+from orchestrator_app.config import settings
 
 _fernet = Fernet(settings.encryption_key.encode())
 

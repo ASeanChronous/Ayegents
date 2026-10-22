@@ -17,9 +17,9 @@ from uuid import UUID
 import asyncpg
 from anthropic import AsyncAnthropic
 
-from app.config import settings
-from app.model_router import resolve_model_id
-from app.tool_gateway import ToolDispatchError, dispatch_tool
+from orchestrator_app.config import settings
+from orchestrator_app.model_router import resolve_model_id
+from orchestrator_app.tool_gateway import ToolDispatchError, dispatch_tool
 
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 

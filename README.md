@@ -54,7 +54,7 @@ satisfied here).
    ```bash
    cd services/orchestrator && python3.11 -m venv .venv && source .venv/bin/activate
    pip install -e ".[dev]"
-   python -m app.main
+   python -m orchestrator_app.main
    ```
 5. **Web**:
    ```bash
