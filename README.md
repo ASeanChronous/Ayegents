@@ -19,12 +19,15 @@ the cost-efficiency stack in `docs/01-architecture.md` §9.
 
 ## Status
 
-Scaffold only — proves the shape of the MVP loop (create agent → enqueue run → orchestrator
-executes a single-agent Claude tool-use loop → inspect `run_steps`). Not yet implemented:
+Scaffold only — proves the shape of the MVP loop: create an agent, create a version with a
+system prompt + attached tools, enqueue a run, the orchestrator executes the Claude
+tool-use loop and dispatches `builtin`/`http`/`agent` tool calls through the Tool Gateway,
+every model/tool call lands in `run_steps`. Not yet implemented:
 
-- Tool dispatch (the agent loop stops at the first `tool_use` block — see the TODO in
-  `services/orchestrator/app/executor.py`)
-- Multi-agent flow execution via LangGraph (sequential/parallel/agent-as-tool)
+- `code_exec` tools (stubbed in `tool_gateway.py` — needs a sandboxed runner, e.g. E2B)
+- Egress allow-listing for `http` tools (any URL in a tool's config is called as-is)
+- Multi-agent *flow* execution via LangGraph (sequential/parallel fan-out) — agent-as-tool
+  works today, but only as a direct call, not as a node in a larger flow graph
 - Auth (`services/api/app/deps.py` stubs the current-user lookup via a header instead of
   verifying a Supabase JWT)
 - Marketplace install/fork flow, the visual flow builder UI
@@ -36,9 +39,11 @@ e.g. via `pyenv` or `uv`, before setting up the services below) and Node 20+ (al
 satisfied here).
 
 1. **Database**: create a Supabase project (or run `supabase start` locally with the CLI),
-   then apply `supabase/migrations/0001_init_schema.sql`.
-2. **Env**: copy `.env.example` to `.env` in the repo root, and to `services/api/.env` and
-   `services/orchestrator/.env`, filling in `DATABASE_URL` and `ANTHROPIC_API_KEY`.
+   then apply `supabase/migrations/0001_init_schema.sql` and `0002_seed_builtin_tools.sql` in order.
+2. **Env**: copy `.env.example` to `services/api/.env` and `services/orchestrator/.env`,
+   filling in `DATABASE_URL` and `ANTHROPIC_API_KEY`. Generate `ENCRYPTION_KEY` once (see the
+   comment in `.env.example`) and use the *same* value in both files — the API encrypts tool
+   credentials with it, the orchestrator decrypts them.
 3. **API**:
    ```bash
    cd services/api && python3.11 -m venv .venv && source .venv/bin/activate
