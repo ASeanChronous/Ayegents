@@ -40,14 +40,21 @@ multi-agent flows. Both are tested against a real Postgres + mocked Claude respo
   check (exact match or `*.example.com` wildcard); `code_exec` tools pass the same host list
   to E2B's own sandbox firewall (`network.allow_out`), enforced by E2B's infrastructure, not
   by this code. None/empty stays unrestricted (unchanged default for every existing tool).
+- **Auth** (`app/auth.py`): every request verifies its bearer token by calling the configured
+  Supabase project's own `GET /auth/v1/user` and trusting a 200 response — this works
+  regardless of whether the project signs tokens with the legacy HS256 shared secret or a
+  newer asymmetric key, without this app needing to implement either signature scheme or
+  JWKS fetching/caching itself. The user id comes from the token's own `sub` claim (read
+  locally, unverified — safe only because trust comes from the remote 200, not from this
+  read). Tested against a stand-in HTTP server implementing that same 200/non-200 contract,
+  confirmed end to end that the identity attached to a created workspace exactly matches the
+  JWT's `sub`, not just that requests were accepted.
 
 Not yet implemented:
 
 - Flow checkpointing/resume — a flow run executes as one in-memory LangGraph `ainvoke` call;
   an orchestrator crash mid-flow loses the run, same as every other run in this scaffold
 - A richer condition language (comparisons, arithmetic) — today's is lookup + truthiness only
-- Auth (`services/api/app/deps.py` stubs the current-user lookup via a header instead of
-  verifying a Supabase JWT)
 - Marketplace install/fork flow, the visual flow builder UI
 
 ## Running locally
@@ -62,7 +69,10 @@ satisfied here).
    filling in `DATABASE_URL` and `ANTHROPIC_API_KEY`. Generate `ENCRYPTION_KEY` once (see the
    comment in `.env.example`) and use the *same* value in both files — the API encrypts tool
    credentials with it, the orchestrator decrypts them. `E2B_API_KEY` (orchestrator only) is
-   needed only if an agent has the `run_python` code_exec tool attached.
+   needed only if an agent has the `run_python` code_exec tool attached. `SUPABASE_URL` and
+   `SUPABASE_ANON_KEY` (API only) are required — every request is verified against that
+   project's own Auth server (`app/auth.py`), so callers need a real Supabase user access
+   token (`Authorization: Bearer <token>`), not an arbitrary header.
 3. **API**:
    ```bash
    cd services/api && python3.11 -m venv .venv && source .venv/bin/activate

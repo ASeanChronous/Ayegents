@@ -2,12 +2,20 @@ from uuid import UUID
 
 from fastapi import Header, HTTPException
 
-# TODO: replace with real Supabase JWT verification (decode the bearer token,
-# extract `sub` as the user id). Stubbed as a header for scaffold purposes only.
+from app.auth import AuthError, verify_token
 
 
-async def get_current_user_id(x_user_id: str = Header(...)) -> UUID:
+async def get_current_user_id(authorization: str = Header(...)) -> UUID:
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="expected 'Authorization: Bearer <token>'")
+    token = authorization[len("Bearer "):]
+
     try:
-        return UUID(x_user_id)
+        sub = await verify_token(token)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    try:
+        return UUID(sub)
     except ValueError:
-        raise HTTPException(status_code=401, detail="invalid user id")
+        raise HTTPException(status_code=401, detail="token 'sub' claim is not a valid UUID") from None
