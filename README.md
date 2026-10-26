@@ -49,13 +49,28 @@ multi-agent flows. Both are tested against a real Postgres + mocked Claude respo
   read). Tested against a stand-in HTTP server implementing that same 200/non-200 contract,
   confirmed end to end that the identity attached to a created workspace exactly matches the
   JWT's `sub`, not just that requests were accepted.
+- **Marketplace publish/install** (`marketplace.py`): scoped to agent listings only, not
+  flows — a flow's spec references agent nodes by id, and installing one would need to
+  recursively fork every agent it depends on, real additional work rather than an oversight.
+  Publishing snapshots the agent's current version's spec into an immutable
+  `listing_versions.spec`, deriving `required_tool_categories` (`"{kind}:{key}"` per attached
+  tool) from what the agent actually uses rather than letting the publisher self-declare it —
+  self-declaration could understate the real footprint, derivation can't. Two things fail
+  publishing outright rather than producing a listing that can't actually install: a
+  workspace-private tool (unresolvable by another workspace's RLS) or an agent-as-tool
+  sub-agent (would need its own recursive install, not yet supported). Installing is a real
+  OAuth-consent gate, not just a formality — refuses with 403 if the installer's approved
+  categories don't cover every required one — then forks a brand-new agent + version +
+  tool-attachments into the installing workspace, re-resolving each tool by key against that
+  workspace's own global tools rather than copying a tool_id that wouldn't resolve under RLS.
 
 Not yet implemented:
 
 - Flow checkpointing/resume — a flow run executes as one in-memory LangGraph `ainvoke` call;
   an orchestrator crash mid-flow loses the run, same as every other run in this scaffold
 - A richer condition language (comparisons, arithmetic) — today's is lookup + truthiness only
-- Marketplace install/fork flow, the visual flow builder UI
+- Flow listings and agent-as-tool listings (see marketplace.py's module docstring)
+- The visual flow builder UI and marketplace storefront UI — `apps/web` is still a placeholder
 
 ## Running locally
 

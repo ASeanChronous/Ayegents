@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from app.db import close_pool
-from app.routers import agent_versions, agents, flows, listings, runs, tools, workspaces
+from app.routers import agent_versions, agents, flows, listings, marketplace, runs, tools, workspaces
 
 app = FastAPI(title="Agent Ecosystem API")
 
@@ -12,6 +12,8 @@ app.include_router(flows.router)
 app.include_router(tools.router)
 app.include_router(runs.router)
 app.include_router(listings.router)
+app.include_router(marketplace.listings_router)
+app.include_router(marketplace.install_router)
 
 
 @app.get("/health")
