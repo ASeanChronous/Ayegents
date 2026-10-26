@@ -1,9 +1,19 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings
 from app.db import close_pool
 from app.routers import agent_versions, agents, flows, listings, marketplace, runs, tools, workspaces
 
 app = FastAPI(title="Agent Ecosystem API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(workspaces.router)
 app.include_router(agents.router)
