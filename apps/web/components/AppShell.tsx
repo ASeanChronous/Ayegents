@@ -1,10 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 import { supabase } from "@/lib/supabaseClient";
 import { useSession } from "@/lib/useSession";
+import { WorkspaceProvider } from "@/lib/useWorkspace";
+import WorkspaceSwitcher from "./WorkspaceSwitcher";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const { session, loading } = useSession();
@@ -27,23 +30,35 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen">
-      <nav className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
-        <span className="font-semibold">Agent Ecosystem</span>
-        <div className="flex items-center gap-4 text-sm text-gray-600">
-          <span>{session.user.email}</span>
-          <button
-            onClick={async () => {
-              await supabase.auth.signOut();
-              router.replace("/login");
-            }}
-            className="rounded-md border border-gray-300 px-3 py-1 hover:bg-gray-50"
-          >
-            Sign out
-          </button>
-        </div>
-      </nav>
-      <main className="mx-auto max-w-5xl p-6">{children}</main>
-    </div>
+    // WorkspaceProvider only mounts once a session exists -- its /workspaces
+    // fetch would otherwise fire before there's a token to send.
+    <WorkspaceProvider>
+      <div className="min-h-screen">
+        <nav className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
+          <div className="flex items-center gap-4">
+            <Link href="/" className="font-semibold">
+              Agent Ecosystem
+            </Link>
+            <WorkspaceSwitcher />
+            <Link href="/workspaces" className="text-sm text-gray-500 hover:text-gray-700">
+              Manage
+            </Link>
+          </div>
+          <div className="flex items-center gap-4 text-sm text-gray-600">
+            <span>{session.user.email}</span>
+            <button
+              onClick={async () => {
+                await supabase.auth.signOut();
+                router.replace("/login");
+              }}
+              className="rounded-md border border-gray-300 px-3 py-1 hover:bg-gray-50"
+            >
+              Sign out
+            </button>
+          </div>
+        </nav>
+        <main className="mx-auto max-w-5xl p-6">{children}</main>
+      </div>
+    </WorkspaceProvider>
   );
 }

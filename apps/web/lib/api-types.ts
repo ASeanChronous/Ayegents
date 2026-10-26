@@ -728,9 +728,7 @@ export interface operations {
     list_my_workspaces_workspaces_get: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -745,23 +743,12 @@ export interface operations {
                     "application/json": components["schemas"]["WorkspaceOut"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     create_workspace_workspaces_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -794,9 +781,7 @@ export interface operations {
     get_workspace_workspaces__workspace_id__get: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
             };
@@ -827,9 +812,7 @@ export interface operations {
     list_agents_workspaces__workspace_id__agents_get: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
             };
@@ -860,9 +843,7 @@ export interface operations {
     create_agent_workspaces__workspace_id__agents_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
             };
@@ -897,9 +878,7 @@ export interface operations {
     create_agent_version_workspaces__workspace_id__agents__agent_id__versions_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
                 agent_id: string;
@@ -935,9 +914,7 @@ export interface operations {
     create_flow_workspaces__workspace_id__flows_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
             };
@@ -972,9 +949,7 @@ export interface operations {
     create_flow_version_workspaces__workspace_id__flows__flow_id__versions_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
                 flow_id: string;
@@ -1010,9 +985,7 @@ export interface operations {
     list_tools_workspaces__workspace_id__tools_get: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
             };
@@ -1043,9 +1016,7 @@ export interface operations {
     create_tool_workspaces__workspace_id__tools_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
             };
@@ -1080,9 +1051,7 @@ export interface operations {
     create_credential_workspaces__workspace_id__tools__tool_id__credentials_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
                 tool_id: string;
@@ -1118,9 +1087,7 @@ export interface operations {
     create_run_workspaces__workspace_id__runs_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
             };
@@ -1155,9 +1122,7 @@ export interface operations {
     get_run_workspaces__workspace_id__runs__run_id__get: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
                 run_id: string;
@@ -1189,9 +1154,7 @@ export interface operations {
     list_run_steps_workspaces__workspace_id__runs__run_id__steps_get: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
                 run_id: string;
@@ -1225,9 +1188,7 @@ export interface operations {
             query?: {
                 category?: string | null;
             };
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -1256,9 +1217,7 @@ export interface operations {
     get_listing_marketplace_listings__listing_id__get: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 listing_id: string;
             };
@@ -1289,9 +1248,7 @@ export interface operations {
     create_listing_workspaces__workspace_id__listings_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
             };
@@ -1326,9 +1283,7 @@ export interface operations {
     publish_listing_version_workspaces__workspace_id__listings__listing_id__versions_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
                 listing_id: string;
@@ -1360,9 +1315,7 @@ export interface operations {
     install_listing_workspaces__workspace_id__marketplace_installs_post: {
         parameters: {
             query?: never;
-            header: {
-                authorization: string;
-            };
+            header?: never;
             path: {
                 workspace_id: string;
             };

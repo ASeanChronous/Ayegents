@@ -119,7 +119,19 @@ the orchestrator only ever populates `latency_ms`, never those two columns.
    API and Postgres. Found and fixed two real bugs this way: the API had no CORS middleware
    at all (added, origin configurable via `CORS_ALLOWED_ORIGINS`), and the login page always
    showed "check your email" after sign-up even when Supabase returns a live session.
-2. Workspace switcher + workspaces page (`GET /workspaces/{id}` now exists, see §6)
+2. **Done.** `lib/useWorkspace.tsx` (`WorkspaceProvider`/`useWorkspace`): fetches the user's
+   workspaces via SWR, tracks the current one in `localStorage` (not a route segment, per
+   §4), defaults to the first workspace when none is selected or the stored id no longer
+   exists. `WorkspaceSwitcher` (a `<select>` in the nav) and `/workspaces` (list + create
+   drawer, using the new shared `DataTable`/`FormDrawer` components) both read/write it.
+   Along the way, fixed a real backend design bug the generated client surfaced immediately:
+   `deps.py` used `authorization: str = Header(...)`, which OpenAPI represents as a required
+   per-endpoint header *parameter* rather than a security scheme — the generated client
+   would have required every call site to pass the token explicitly, defeating the
+   middleware-based auto-attach from phase 1. Switched to FastAPI's `HTTPBearer` security
+   scheme and regenerated the client. Verified in a real browser: sign-up, create two
+   workspaces, switch between them via both the table's "switch" action and the nav
+   dropdown, and confirmed the selection survives a full page reload.
 3. Tools: list/create, credential form
 4. Agents: list/create, version publish form with a tool-attachment picker
 5. Runs: start-a-run form, run list, run inspector (needs the `run_steps` listing endpoint

@@ -31,9 +31,14 @@ client.use({
   },
 });
 
-/** Unwraps an openapi-fetch result, throwing ApiError on failure instead of
- * making every call site check `error` separately. */
-export function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T {
+/** Unwraps an openapi-fetch call, throwing ApiError on failure instead of
+ * making every call site check `error` separately. Takes the call's Promise
+ * directly (`unwrap(api.GET(...))`) rather than requiring `await` at every
+ * call site first. */
+export async function unwrap<T>(
+  resultPromise: Promise<{ data?: T; error?: unknown; response: Response }>
+): Promise<T> {
+  const result = await resultPromise;
   if (result.error !== undefined) {
     const detail =
       typeof result.error === "object" && result.error !== null && "detail" in result.error
