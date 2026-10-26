@@ -94,18 +94,24 @@ no polling, no SWR interval to tune — but it's a separate chunk of work (Realt
 setup, RLS-aware subscriptions) that polling avoids needing right now. Noted here so it's a
 deliberate deferral, not a gap someone finds later and wonders about.
 
-The run inspector also needs `GET /workspaces/{id}/runs/{run_id}/steps` to list `run_steps` —
-**this endpoint doesn't exist yet** (`services/api/app/routers/runs.py` only has create + get
-run by id, no steps listing). Adding it is part of this phase's backend work, not purely
-frontend.
+The run inspector also needs `GET /workspaces/{id}/runs/{run_id}/steps` to list `run_steps`
+— **done**: added alongside `GET /workspaces/{id}` (§7), both tested end to end against a
+real run (queued → executed via a mocked Claude response → fetched back through both
+endpoints, confirming correct serialization of the run's final output and every step's
+tokens/status/input/output). `GET .../runs/{id}` was also expanded from `{id, status}` to the
+full detail the inspector needs (input, output, total_tokens, error, timestamps).
+
+Two things noticed while building this, not fixed (out of scope of adding the endpoints
+themselves, flagged so the inspector UI doesn't present them as meaningful): `total_cost_usd`
+and every step's `cost_usd` are always `0` — no model-tier pricing table exists yet to
+compute them from token counts. And `run_steps.started_at`/`finished_at` are always `null` —
+the orchestrator only ever populates `latency_ms`, never those two columns.
 
 ## 7. Phased build order
 
 1. Tailwind setup + Supabase auth client + `/login` + session-gated layout + API client
    codegen wired into the dev/build scripts
-2. Workspace switcher + workspaces page (needs `GET /workspaces/{id}` — currently only
-   `GET /workspaces` (list mine) and `POST` exist; a single-workspace fetch for the switcher's
-   "current workspace" display is a small backend addition too)
+2. Workspace switcher + workspaces page (`GET /workspaces/{id}` now exists, see §6)
 3. Tools: list/create, credential form
 4. Agents: list/create, version publish form with a tool-attachment picker
 5. Runs: start-a-run form, run list, run inspector (needs the `run_steps` listing endpoint

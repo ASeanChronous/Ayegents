@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +19,41 @@ class RunCreate(BaseModel):
 class RunOut(BaseModel):
     id: UUID
     status: str
+
+
+class RunDetailOut(BaseModel):
+    id: UUID
+    status: str
+    input: dict
+    output: dict | None
+    total_tokens: int
+    # Always 0 today — no model-tier pricing table exists yet to compute this
+    # from tokens (same gap as run_steps.cost_usd below). Exposed as-is
+    # rather than hidden, since the column is real; just not meaningful yet.
+    total_cost_usd: float
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+
+
+class RunStepOut(BaseModel):
+    id: UUID
+    step_index: int
+    kind: str
+    node_id: str | None
+    agent_id: UUID | None
+    tool_id: UUID | None
+    input: dict | None
+    output: dict | None
+    tokens_input: int
+    tokens_output: int
+    cost_usd: float  # see RunDetailOut.total_cost_usd — always 0 today
+    latency_ms: int | None
+    status: str
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
 
 
 @router.post("", response_model=RunOut, status_code=201)
@@ -49,12 +85,43 @@ async def create_run(
     return RunOut(**dict(run))
 
 
-@router.get("/{run_id}", response_model=RunOut)
+@router.get("/{run_id}", response_model=RunDetailOut)
 async def get_run(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(get_current_user_id)):
     pool = await get_pool()
     row = await pool.fetchrow(
-        "select id, status from runs where id = $1 and workspace_id = $2", run_id, workspace_id
+        """
+        select id, status, input, output, total_tokens, total_cost_usd, error,
+               started_at, finished_at, created_at
+        from runs where id = $1 and workspace_id = $2
+        """,
+        run_id,
+        workspace_id,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return RunOut(**dict(row))
+    return RunDetailOut(**dict(row))
+
+
+@router.get("/{run_id}/steps", response_model=list[RunStepOut])
+async def list_run_steps(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    pool = await get_pool()
+    # Confirm the run belongs to this workspace before listing its steps —
+    # run_steps has no workspace_id column of its own (see docs/02-schema.md
+    # §4), so this check is the only thing standing between "my workspace's
+    # run" and "any run_id a caller happens to guess."
+    run = await pool.fetchrow("select id from runs where id = $1 and workspace_id = $2", run_id, workspace_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    rows = await pool.fetch(
+        """
+        select id, step_index, kind, node_id, agent_id, tool_id, input, output,
+               tokens_input, tokens_output, cost_usd, latency_ms, status, error,
+               started_at, finished_at
+        from run_steps
+        where run_id = $1
+        order by step_index
+        """,
+        run_id,
+    )
+    return [RunStepOut(**dict(r)) for r in rows]
