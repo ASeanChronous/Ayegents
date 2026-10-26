@@ -143,7 +143,20 @@ the orchestrator only ever populates `latency_ms`, never those two columns.
    egress allow-list and `requires_credential`, added a credential to it, and confirmed
    directly in Postgres that the stored `secret_encrypted` bytes don't contain the plaintext
    secret (Fernet-encrypted, not just "the UI says it worked").
-4. Agents: list/create, version publish form with a tool-attachment picker
+4. **Done.** `/agents`: list + create. `/agents/[id]`: agent header, a version history
+   table, and a publish-version drawer (system prompt, model tier, optional max steps, and a
+   tool-attachment picker — each available tool is a checkbox that reveals a JSON config
+   textarea when checked). The drawer prefills from the agent's latest version when reopened,
+   so publishing a tweak doesn't mean retyping the whole prompt and re-picking every tool.
+   Needed two more backend endpoints the detail page genuinely couldn't work without —
+   `GET .../agents/{id}` and `GET .../agents/{id}/versions` (nesting each version's attached
+   tools and `sub_agent_ids`) — added the same way as the run-inspector gaps earlier.
+   Agent-as-tool (`sub_agent_ids`) is deliberately not in this form: wiring it up for real
+   needs a matching `agent`-kind tool with `config.sub_agent_id` too
+   (`orchestrator_app/tool_gateway.py`), a two-step setup left API-only for now. Verified in a
+   real browser: created an agent, published a version with the `current_time` tool attached,
+   confirmed the version/tool attachment directly in Postgres (not just the UI's table), and
+   confirmed reopening the drawer correctly prefilled from that version.
 5. Runs: start-a-run form, run list, run inspector (needs the `run_steps` listing endpoint
    from §6)
 

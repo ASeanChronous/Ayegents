@@ -40,6 +40,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               Agent Ecosystem
             </Link>
             <div className="flex items-center gap-4 text-sm text-gray-600">
+              <Link href="/agents" className="hover:text-gray-900">
+                Agents
+              </Link>
               <Link href="/tools" className="hover:text-gray-900">
                 Tools
               </Link>

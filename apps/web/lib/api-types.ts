@@ -57,6 +57,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/agents/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent */
+        get: operations["get_agent_workspaces__workspace_id__agents__agent_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/agents/{agent_id}/versions": {
         parameters: {
             query?: never;
@@ -64,7 +81,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Agent Versions */
+        get: operations["list_agent_versions_workspaces__workspace_id__agents__agent_id__versions_get"];
         put?: never;
         /** Create Agent Version */
         post: operations["create_agent_version_workspaces__workspace_id__agents__agent_id__versions_post"];
@@ -345,6 +363,33 @@ export interface components {
              */
             sub_agent_ids: string[];
         };
+        /** AgentVersionDetailOut */
+        AgentVersionDetailOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Version */
+            version: number;
+            /** System Prompt */
+            system_prompt: string;
+            /** Model Tier */
+            model_tier: string;
+            /** Max Steps */
+            max_steps: number | null;
+            /** Max Tokens */
+            max_tokens: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Tools */
+            tools: components["schemas"]["AttachedToolOut"][];
+            /** Sub Agent Ids */
+            sub_agent_ids: string[];
+        };
         /** AgentVersionOut */
         AgentVersionOut: {
             /**
@@ -356,6 +401,22 @@ export interface components {
             version: number;
             /** Model Tier */
             model_tier: string;
+        };
+        /** AttachedToolOut */
+        AttachedToolOut: {
+            /**
+             * Tool Id
+             * Format: uuid
+             */
+            tool_id: string;
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
         };
         /** CredentialCreate */
         CredentialCreate: {
@@ -862,6 +923,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_workspaces__workspace_id__agents__agent_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_versions_workspaces__workspace_id__agents__agent_id__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentVersionDetailOut"][];
                 };
             };
             /** @description Validation Error */

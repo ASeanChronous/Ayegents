@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import get_pool
@@ -29,6 +29,19 @@ async def list_agents(workspace_id: UUID, user_id: UUID = Depends(get_current_us
         workspace_id,
     )
     return [AgentOut(**dict(r)) for r in rows]
+
+
+@router.get("/{agent_id}", response_model=AgentOut)
+async def get_agent(workspace_id: UUID, agent_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "select id, name, description, status from agents where id = $1 and workspace_id = $2",
+        agent_id,
+        workspace_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return AgentOut(**dict(row))
 
 
 @router.post("", response_model=AgentOut, status_code=201)

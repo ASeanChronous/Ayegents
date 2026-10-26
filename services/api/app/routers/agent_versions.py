@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +28,67 @@ class AgentVersionOut(BaseModel):
     id: UUID
     version: int
     model_tier: str
+
+
+class AttachedToolOut(BaseModel):
+    tool_id: UUID
+    key: str
+    name: str
+    config: dict
+
+
+class AgentVersionDetailOut(BaseModel):
+    id: UUID
+    version: int
+    system_prompt: str
+    model_tier: str
+    max_steps: int | None
+    max_tokens: int | None
+    created_at: datetime
+    tools: list[AttachedToolOut]
+    sub_agent_ids: list[UUID]
+
+
+@router.get("", response_model=list[AgentVersionDetailOut])
+async def list_agent_versions(
+    workspace_id: UUID, agent_id: UUID, user_id: UUID = Depends(get_current_user_id)
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        agent = await conn.fetchrow(
+            "select id from agents where id = $1 and workspace_id = $2", agent_id, workspace_id
+        )
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+
+        version_rows = await conn.fetch(
+            """
+            select id, version, system_prompt, model_tier, max_steps, max_tokens, created_at
+            from agent_versions where agent_id = $1 order by version desc
+            """,
+            agent_id,
+        )
+        versions = []
+        for v in version_rows:
+            tool_rows = await conn.fetch(
+                """
+                select t.id as tool_id, t.key, t.name, avt.config
+                from agent_version_tools avt join tools t on t.id = avt.tool_id
+                where avt.agent_version_id = $1
+                """,
+                v["id"],
+            )
+            sub_agent_rows = await conn.fetch(
+                "select sub_agent_id from agent_version_subagents where agent_version_id = $1", v["id"]
+            )
+            versions.append(
+                AgentVersionDetailOut(
+                    **dict(v),
+                    tools=[AttachedToolOut(**dict(t)) for t in tool_rows],
+                    sub_agent_ids=[r["sub_agent_id"] for r in sub_agent_rows],
+                )
+            )
+    return versions
 
 
 @router.post("", response_model=AgentVersionOut, status_code=201)
