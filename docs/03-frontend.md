@@ -132,7 +132,17 @@ the orchestrator only ever populates `latency_ms`, never those two columns.
    scheme and regenerated the client. Verified in a real browser: sign-up, create two
    workspaces, switch between them via both the table's "switch" action and the nav
    dropdown, and confirmed the selection survives a full page reload.
-3. Tools: list/create, credential form
+3. **Done.** `/tools`: list (global + workspace tools together, no visual distinction yet —
+   `ToolOut` doesn't expose `workspace_id`), create (`key`/`name`/`kind`/egress allow-list/
+   requires-credential), and a credential drawer for any tool that needs one. `kind` is
+   restricted to `http`/`code_exec`/`agent` in the create form — `builtin` is excluded
+   because a builtin tool's key has to match an entry in the orchestrator's own
+   `BUILTIN_TOOLS` registry, so creating one generically here would just produce a tool that
+   fails every dispatch. New shared `Badge` component for `kind`. Verified in a real browser:
+   the two migration-seeded global tools appear correctly, created a new `http` tool with an
+   egress allow-list and `requires_credential`, added a credential to it, and confirmed
+   directly in Postgres that the stored `secret_encrypted` bytes don't contain the plaintext
+   secret (Fernet-encrypted, not just "the UI says it worked").
 4. Agents: list/create, version publish form with a tool-attachment picker
 5. Runs: start-a-run form, run list, run inspector (needs the `run_steps` listing endpoint
    from §6)

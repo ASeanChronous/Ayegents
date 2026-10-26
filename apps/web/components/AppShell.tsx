@@ -35,16 +35,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <WorkspaceProvider>
       <div className="min-h-screen">
         <nav className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-6">
             <Link href="/" className="font-semibold">
               Agent Ecosystem
             </Link>
-            <WorkspaceSwitcher />
-            <Link href="/workspaces" className="text-sm text-gray-500 hover:text-gray-700">
-              Manage
-            </Link>
+            <div className="flex items-center gap-4 text-sm text-gray-600">
+              <Link href="/tools" className="hover:text-gray-900">
+                Tools
+              </Link>
+              <Link href="/workspaces" className="hover:text-gray-900">
+                Workspaces
+              </Link>
+            </div>
           </div>
           <div className="flex items-center gap-4 text-sm text-gray-600">
+            <WorkspaceSwitcher />
             <span>{session.user.email}</span>
             <button
               onClick={async () => {
