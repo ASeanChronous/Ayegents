@@ -6,8 +6,9 @@ builder canvas and the marketplace storefront are real UI projects of their own 
 its own doc (`04-frontend-builder.md`, `05-frontend-marketplace.md`) once this phase ships,
 not a section bolted onto this one.
 
-`apps/web` currently has a single placeholder page (`app/page.tsx`) and no auth, data
-fetching, or styling setup — this doc is the plan for replacing that.
+`apps/web` had a single placeholder page and no auth, data fetching, or styling setup when
+this doc was written — §7 step 1 (auth, styling, the generated API client) is now done; the
+rest of this doc is still the plan for the pages built on top of it.
 
 ## 1. What "functional core" covers
 
@@ -109,8 +110,15 @@ the orchestrator only ever populates `latency_ms`, never those two columns.
 
 ## 7. Phased build order
 
-1. Tailwind setup + Supabase auth client + `/login` + session-gated layout + API client
-   codegen wired into the dev/build scripts
+1. **Done.** Tailwind, `lib/supabaseClient.ts` + `useSession()`, `/login` (sign-in/sign-up),
+   `AppShell` gating everything under `app/(app)/`, and the generated client
+   (`npm run gen:api` → `lib/api-types.ts`, wrapped by `lib/api.ts`). Verified in a real
+   browser against a minimal GoTrue-compatible stand-in: sign-up, sign-in, wrong-password
+   rejection, sign-out, the `/` → `/login` redirect, and — through the actual generated
+   client, not a raw fetch — an authenticated `GET /workspaces` round trip against the real
+   API and Postgres. Found and fixed two real bugs this way: the API had no CORS middleware
+   at all (added, origin configurable via `CORS_ALLOWED_ORIGINS`), and the login page always
+   showed "check your email" after sign-up even when Supabase returns a live session.
 2. Workspace switcher + workspaces page (`GET /workspaces/{id}` now exists, see §6)
 3. Tools: list/create, credential form
 4. Agents: list/create, version publish form with a tool-attachment picker

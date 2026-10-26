@@ -87,7 +87,9 @@ satisfied here).
    needed only if an agent has the `run_python` code_exec tool attached. `SUPABASE_URL` and
    `SUPABASE_ANON_KEY` (API only) are required — every request is verified against that
    project's own Auth server (`app/auth.py`), so callers need a real Supabase user access
-   token (`Authorization: Bearer <token>`), not an arbitrary header.
+   token (`Authorization: Bearer <token>`), not an arbitrary header. `CORS_ALLOWED_ORIGINS`
+   (API only) defaults to the local Next.js dev server; the browser rejects every API call
+   outright if this doesn't list wherever `apps/web` is actually running.
 3. **API**:
    ```bash
    cd services/api && python3.11 -m venv .venv && source .venv/bin/activate
@@ -100,8 +102,12 @@ satisfied here).
    pip install -e ".[dev]"
    python -m orchestrator_app.main
    ```
-5. **Web**:
+5. **Web**: copy `.env.example` to `apps/web/.env.local` too, filling in
+   `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` (same Supabase project as
+   above) and `NEXT_PUBLIC_API_URL`. With the API running, regenerate the typed client
+   once (and again whenever the API's routes/schemas change):
    ```bash
    npm install
+   npm run gen:api --workspace=apps/web   # needs the API reachable at NEXT_PUBLIC_API_URL
    npm run dev --workspace=apps/web
    ```
