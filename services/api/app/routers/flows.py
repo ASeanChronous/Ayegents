@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -18,6 +19,29 @@ class FlowOut(BaseModel):
     id: UUID
     name: str
     status: str
+
+
+@router.get("", response_model=list[FlowOut])
+async def list_flows(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "select id, name, status from flows where workspace_id = $1 order by created_at desc",
+        workspace_id,
+    )
+    return [FlowOut(**dict(r)) for r in rows]
+
+
+@router.get("/{flow_id}", response_model=FlowOut)
+async def get_flow(workspace_id: UUID, flow_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "select id, name, status from flows where id = $1 and workspace_id = $2",
+        flow_id,
+        workspace_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="flow not found")
+    return FlowOut(**dict(row))
 
 
 @router.post("", response_model=FlowOut, status_code=201)
@@ -79,6 +103,32 @@ class FlowVersionCreate(BaseModel):
 class FlowVersionOut(BaseModel):
     id: UUID
     version: int
+
+
+class FlowVersionDetailOut(BaseModel):
+    id: UUID
+    version: int
+    spec: FlowSpec
+    created_at: datetime
+
+
+@router.get("/{flow_id}/versions", response_model=list[FlowVersionDetailOut])
+async def list_flow_versions(
+    workspace_id: UUID, flow_id: UUID, user_id: UUID = Depends(get_current_user_id)
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        flow = await conn.fetchrow(
+            "select id from flows where id = $1 and workspace_id = $2", flow_id, workspace_id
+        )
+        if flow is None:
+            raise HTTPException(status_code=404, detail="flow not found")
+
+        rows = await conn.fetch(
+            "select id, version, spec, created_at from flow_versions where flow_id = $1 order by version desc",
+            flow_id,
+        )
+    return [FlowVersionDetailOut(**dict(r)) for r in rows]
 
 
 @router.post("/{flow_id}/versions", response_model=FlowVersionOut, status_code=201)

@@ -180,24 +180,33 @@ Serialization is two pure functions, not spread across the components above:
 
 ## 8. Needed backend endpoints
 
-`flows.py` currently only has `POST /flows` and `POST /flows/{id}/versions` — write-only,
-because nothing needed to read a flow back until now. The canvas can't load an existing flow
-without these (same shape as the agent-detail gap `03-frontend.md` §7 step 4 hit and closed):
+**Done.** `flows.py` had only `POST /flows` and `POST /flows/{id}/versions` — write-only,
+because nothing needed to read a flow back until now. Added the three reads the canvas can't
+load an existing flow without (same shape as the agent-detail gap `03-frontend.md` §7 step 4
+hit and closed):
 
 - `GET /workspaces/{id}/flows` — list, for `/flows`
 - `GET /workspaces/{id}/flows/{flow_id}` — one flow's `{id, name, status}`, for the canvas
   page header
 - `GET /workspaces/{id}/flows/{flow_id}/versions` — version history for the toolbar's
-  version picker, each with its `spec` so `canvasFromSpec` can load any of them, not just
-  the latest
+  version picker, each with its full `spec` so `canvasFromSpec` can load any of them, not
+  just the latest
 
-No executor or spec-validation changes are needed — `FlowSpec`/`FlowNode`/`FlowEdge` already
-accept everything the canvas produces once `config.ui_position` carries layout (§3).
+No executor or spec-validation changes were needed — `FlowSpec`/`FlowNode`/`FlowEdge` already
+accept everything the canvas will produce once `config.ui_position` carries layout (§3).
+Verified against the real API (Docker Postgres + migrations, a minimal GoTrue stand-in for
+real JWTs — same setup every backend/frontend pass in this project has used): created a
+workspace, created a flow (`GET .../flows` correctly empty-then-one, `GET
+.../flows/{id}` 200, a bogus id 404), posted a version whose spec put `{"x": 0, "y": 0}` and
+`{"x": 200, "y": 0}` under each node's `config.ui_position` — confirming the exact mechanism
+§3 designed — and fetched it back through `GET .../versions`, round-tripping both the
+positions and the `edges[].from` alias correctly. All five `/flows*` routes also confirmed
+present and correctly shaped in `/openapi.json`, so client-generation in the next phase has
+real types to generate from.
 
 ## 9. Phased build order
 
-1. Backend: the three `GET` endpoints (§8) — small, same pattern as every prior read-gap
-   this project has hit, do first so the canvas has something to load against
+1. **Done.** Backend: the three `GET` endpoints (§8).
 2. `@xyflow/react` added to `apps/web`, `specFromCanvas`/`canvasFromSpec` (§7) written and
    unit-tested against hand-written specs (including round-tripping `flow_executor.py`'s own
    test fixtures, if any exist, or the architecture doc's spec sketch) before any UI sits on
