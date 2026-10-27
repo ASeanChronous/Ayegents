@@ -180,7 +180,8 @@ the orchestrator only ever populates `latency_ms`, never those two columns.
 
 - Visual flow builder: node/edge canvas (React Flow), compiling to the `flow_versions.spec`
   shape `flow_executor.py` already consumes — the backend is ready for this, no orchestrator
-  changes needed, purely a frontend + flow-CRUD-UI project.
+  changes needed, purely a frontend + flow-CRUD-UI project. **Scoped**: see
+  `04-frontend-builder.md`.
 - Marketplace storefront: browse/detail/install-with-consent UI over the `marketplace.py`
   endpoints already built and tested.
 - Realtime run updates (§6), once polling's rough edges (interval tuning, wasted requests on
