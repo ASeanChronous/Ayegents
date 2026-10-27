@@ -99,10 +99,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Flows */
+        get: operations["list_flows_workspaces__workspace_id__flows_get"];
         put?: never;
         /** Create Flow */
         post: operations["create_flow_workspaces__workspace_id__flows_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/flows/{flow_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Flow */
+        get: operations["get_flow_workspaces__workspace_id__flows__flow_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -116,7 +134,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Flow Versions */
+        get: operations["list_flow_versions_workspaces__workspace_id__flows__flow_id__versions_get"];
         put?: never;
         /** Create Flow Version */
         post: operations["create_flow_version_workspaces__workspace_id__flows__flow_id__versions_post"];
@@ -493,6 +512,22 @@ export interface components {
         /** FlowVersionCreate */
         FlowVersionCreate: {
             spec: components["schemas"]["FlowSpec"];
+        };
+        /** FlowVersionDetailOut */
+        FlowVersionDetailOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Version */
+            version: number;
+            spec: components["schemas"]["FlowSpec"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** FlowVersionOut */
         FlowVersionOut: {
@@ -1060,6 +1095,37 @@ export interface operations {
             };
         };
     };
+    list_flows_workspaces__workspace_id__flows_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlowOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_flow_workspaces__workspace_id__flows_post: {
         parameters: {
             query?: never;
@@ -1082,6 +1148,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FlowOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_flow_workspaces__workspace_id__flows__flow_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                flow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlowOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_flow_versions_workspaces__workspace_id__flows__flow_id__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                flow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlowVersionDetailOut"][];
                 };
             };
             /** @description Validation Error */

@@ -207,10 +207,23 @@ real types to generate from.
 ## 9. Phased build order
 
 1. **Done.** Backend: the three `GET` endpoints (§8).
-2. `@xyflow/react` added to `apps/web`, `specFromCanvas`/`canvasFromSpec` (§7) written and
-   unit-tested against hand-written specs (including round-tripping `flow_executor.py`'s own
-   test fixtures, if any exist, or the architecture doc's spec sketch) before any UI sits on
-   top of them — a serialization bug here corrupts saved flows silently
+2. **Done.** `@xyflow/react` added to `apps/web`. `lib/flowSpec.ts` has `specFromCanvas`/
+   `canvasFromSpec` (§7) plus the auto-layout fallback (§7, for a loaded spec with no
+   `ui_position` yet) — `vitest` added as the project's first frontend test runner (none
+   existed; `npm test`) and `lib/flowSpec.test.ts` covers the round trip.
+   `flow_executor.py` had no existing test fixtures to reuse, so the fixture is the
+   architecture doc's own spec sketch (§4 of `01-architecture.md`) instead — round-tripped
+   byte-for-byte apart from the positions `ui_position` adds. Also covered: `ui_position`
+   never leaks into a node's real `config`; BFS-by-depth auto-layout for positionless nodes,
+   including giving fan-out siblings at the same depth distinct `y` so they don't stack;
+   `agent_id`/`tool_id` null-vs-set preserved per node type; edge conditions (including
+   `null`/unconditional) preserved; two edges sharing the same `from`/`to` (two branches of
+   one conditional) get distinct ids; a dragged position overwrites the saved one on
+   re-save. `npx tsc --noEmit` and `npm run build` both clean (9 routes, unchanged — this
+   phase added no pages yet). One dependency-install snag worth recording: `vitest@5.0.2`'s
+   installer crashed npm's arborist (`Cannot read properties of null (reading 'edgesOut')`)
+   resolving its own optional peer browser-provider packages; landed on `vitest@5.0.5` +
+   `vite@8.1.6` installed with `--legacy-peer-deps` instead of chasing that further.
 3. `/flows` list + create (same pattern as `/agents`, `/tools`)
 4. `<FlowCanvas>` + `<NodePalette>` + the five node components rendering read-only (load a
    spec, see it laid out, no editing yet) — proves `canvasFromSpec` + the library setup
