@@ -224,7 +224,13 @@ real types to generate from.
    installer crashed npm's arborist (`Cannot read properties of null (reading 'edgesOut')`)
    resolving its own optional peer browser-provider packages; landed on `vitest@5.0.5` +
    `vite@8.1.6` installed with `--legacy-peer-deps` instead of chasing that further.
-3. `/flows` list + create (same pattern as `/agents`, `/tools`)
+3. **Done.** `/flows` list + create (same pattern as `/agents`/`/tools`; `FlowCreate` is
+   name-only, so the drawer has no description field unlike the agent/tool ones). Each
+   row links to `/flows/{id}` — the canvas route from §6, which doesn't exist until step 4,
+   so that link 404s cleanly for now rather than being left unclickable; confirmed that's a
+   plain 404, not a crash. Verified in a real browser: created a workspace, created a flow,
+   confirmed the empty state, the `draft` status badge, and the row directly in Postgres
+   (name/workspace/`created_by` all correct). `AppShell`'s nav gained a Flows link.
 4. `<FlowCanvas>` + `<NodePalette>` + the five node components rendering read-only (load a
    spec, see it laid out, no editing yet) — proves `canvasFromSpec` + the library setup
    before adding interaction

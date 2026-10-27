@@ -49,6 +49,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <Link href="/runs" className="hover:text-gray-900">
                 Runs
               </Link>
+              <Link href="/flows" className="hover:text-gray-900">
+                Flows
+              </Link>
               <Link href="/workspaces" className="hover:text-gray-900">
                 Workspaces
               </Link>
