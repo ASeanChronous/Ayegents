@@ -157,8 +157,24 @@ the orchestrator only ever populates `latency_ms`, never those two columns.
    real browser: created an agent, published a version with the `current_time` tool attached,
    confirmed the version/tool attachment directly in Postgres (not just the UI's table), and
    confirmed reopening the drawer correctly prefilled from that version.
-5. Runs: start-a-run form, run list, run inspector (needs the `run_steps` listing endpoint
-   from §6)
+5. **Done.** `/runs`: run list (agent name, status badge, tokens, started time) and a
+   start-a-run drawer (pick an agent, JSON input). `/runs/[id]`: run inspector — status
+   badge, input/output JSON panels, total tokens, finished time, and an expandable
+   `run_steps` timeline (kind, node, token counts, latency, status; clicking a row reveals
+   its JSON input/output and error). Polls `GET .../runs/{id}` and `.../runs/{id}/steps`
+   every 2s while the run is `queued`/`running`, stopping once it reaches a terminal status
+   (§6) — SWR's `refreshInterval` as a function of the latest data, not a fixed interval.
+   Needed one more backend endpoint the list page couldn't work without: `GET
+   /workspaces/{id}/runs` (list, no listing endpoint existed before this — only
+   create/get-one/get-steps). Verified in a real browser: created an agent, published a
+   version with the `current_time` tool, started a run, confirmed it appeared `queued` in
+   the list and inspector. Since no orchestrator was running in this pass (would need a
+   real `ANTHROPIC_API_KEY`), drove the run through `running` → `succeeded` directly in
+   Postgres (status, two `run_steps` rows, output, token count) to verify the actual thing
+   this page exists to prove: the inspector picks up every change via polling with no
+   reload — status badge, step rows, and the output panel all updated live — a step row
+   expanded to show its JSON input/output, and polling genuinely stopped (no further
+   requests) once the run hit `succeeded`.
 
 ## 8. Open items for `04`/`05`
 

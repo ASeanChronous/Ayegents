@@ -21,6 +21,16 @@ class RunOut(BaseModel):
     status: str
 
 
+class RunListItemOut(BaseModel):
+    id: UUID
+    status: str
+    agent_id: UUID | None
+    flow_id: UUID | None
+    total_tokens: int
+    created_at: datetime
+    finished_at: datetime | None
+
+
 class RunDetailOut(BaseModel):
     id: UUID
     status: str
@@ -54,6 +64,21 @@ class RunStepOut(BaseModel):
     error: str | None
     started_at: datetime | None
     finished_at: datetime | None
+
+
+@router.get("", response_model=list[RunListItemOut])
+async def list_runs(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        select id, status, agent_id, flow_id, total_tokens, created_at, finished_at
+        from runs where workspace_id = $1
+        order by created_at desc
+        limit 100
+        """,
+        workspace_id,
+    )
+    return [RunListItemOut(**dict(r)) for r in rows]
 
 
 @router.post("", response_model=RunOut, status_code=201)

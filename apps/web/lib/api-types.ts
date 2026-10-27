@@ -168,7 +168,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Runs */
+        get: operations["list_runs_workspaces__workspace_id__runs_get"];
         put?: never;
         /** Create Run */
         post: operations["create_run_workspaces__workspace_id__runs_post"];
@@ -606,6 +607,29 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** RunListItemOut */
+        RunListItemOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Status */
+            status: string;
+            /** Agent Id */
+            agent_id: string | null;
+            /** Flow Id */
+            flow_id: string | null;
+            /** Total Tokens */
+            total_tokens: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
         };
         /** RunOut */
         RunOut: {
@@ -1196,6 +1220,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runs_workspaces__workspace_id__runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunListItemOut"][];
                 };
             };
             /** @description Validation Error */
