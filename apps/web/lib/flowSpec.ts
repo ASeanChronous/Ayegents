@@ -105,6 +105,12 @@ export function canvasFromSpec(spec: FlowSpec): { nodes: FlowCanvasNode[]; edges
       id: node.id,
       type: node.type,
       position,
+      // The trigger is exactly-one-per-flow and server-enforced (FlowSpec's
+      // own validator); NodeInspector already never offers a Delete button
+      // for it, but React Flow's own Backspace/Delete keybinding acts on
+      // whatever's selected regardless -- `deletable: false` closes that gap
+      // too, rather than relying on a save that's guaranteed to 400.
+      deletable: node.type !== "trigger",
       data: {
         agentId: node.agent_id ?? null,
         toolId: node.tool_id ?? null,

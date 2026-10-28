@@ -14,11 +14,12 @@ import {
   type OnSelectionChangeFunc,
 } from "@xyflow/react";
 
-import { api, unwrap } from "@/lib/api";
+import { api, unwrap, ApiError } from "@/lib/api";
 import { useWorkspace } from "@/lib/useWorkspace";
 import {
   canvasFromSpec,
   createCanvasNode,
+  specFromCanvas,
   type FlowCanvasEdge,
   type FlowCanvasNode,
   type FlowNodeType,
@@ -54,7 +55,7 @@ export default function FlowCanvasPage() {
         })
       )
   );
-  const { data: versions } = useSWR(
+  const { data: versions, mutate: mutateVersions } = useSWR(
     workspaceId ? `/workspaces/${workspaceId}/flows/${flowId}/versions` : null,
     () =>
       unwrap(
@@ -89,6 +90,13 @@ export default function FlowCanvasPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
+  // Tracks whether the canvas has edits the server doesn't have yet. Set on
+  // every real edit (not on mere selection or React Flow's own first-render
+  // dimension measurement) and cleared whenever nodes/edges are (re)seeded
+  // from the server -- initial load, or the reload a successful save
+  // triggers below.
+  const [dirty, setDirty] = useState(false);
+
   useEffect(() => {
     if (latestSpec === undefined) return;
     const { nodes: seededNodes, edges: seededEdges } = canvasFromSpec(latestSpec);
@@ -96,42 +104,78 @@ export default function FlowCanvasPage() {
     setEdges(seededEdges);
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
+    setDirty(false);
   }, [latestSpec]);
 
-  const onNodesChange: OnNodesChange<FlowCanvasNode> = useCallback(
-    (changes) => setNodes((nds) => applyNodeChanges(changes, nds ?? [])),
-    []
-  );
-  const onEdgesChange: OnEdgesChange<FlowCanvasEdge> = useCallback(
-    (changes) => setEdges((eds) => applyEdgeChanges(changes, eds ?? [])),
-    []
-  );
-  const onConnect: OnConnect = useCallback(
-    (connection) => setEdges((eds) => addEdge({ ...connection, data: { condition: null } }, eds ?? [])),
-    []
-  );
+  const onNodesChange: OnNodesChange<FlowCanvasNode> = useCallback((changes) => {
+    setNodes((nds) => applyNodeChanges(changes, nds ?? []));
+    if (changes.some((c) => c.type === "remove" || (c.type === "position" && c.dragging === false))) {
+      setDirty(true);
+    }
+  }, []);
+  const onEdgesChange: OnEdgesChange<FlowCanvasEdge> = useCallback((changes) => {
+    setEdges((eds) => applyEdgeChanges(changes, eds ?? []));
+    if (changes.some((c) => c.type === "remove")) setDirty(true);
+  }, []);
+  const onConnect: OnConnect = useCallback((connection) => {
+    setEdges((eds) => addEdge({ ...connection, data: { condition: null } }, eds ?? []));
+    setDirty(true);
+  }, []);
   const onSelectionChange: OnSelectionChangeFunc = useCallback(({ nodes: selNodes, edges: selEdges }) => {
     setSelectedNodeId(selNodes[0]?.id ?? null);
     setSelectedEdgeId(selEdges[0]?.id ?? null);
   }, []);
   const onAddNode = useCallback((type: FlowNodeType, position: { x: number; y: number }) => {
     setNodes((nds) => [...(nds ?? []), createCanvasNode(type, position)]);
+    setDirty(true);
   }, []);
   const onUpdateNodeData = useCallback((id: string, data: FlowCanvasNode["data"]) => {
     setNodes((nds) => (nds ?? []).map((n) => (n.id === id ? { ...n, data } : n)));
+    setDirty(true);
   }, []);
   const onDeleteNode = useCallback((id: string) => {
     setNodes((nds) => (nds ?? []).filter((n) => n.id !== id));
     setEdges((eds) => (eds ?? []).filter((e) => e.source !== id && e.target !== id));
     setSelectedNodeId(null);
+    setDirty(true);
   }, []);
   const onUpdateEdgeCondition = useCallback((id: string, condition: string | null) => {
     setEdges((eds) => (eds ?? []).map((e) => (e.id === id ? { ...e, data: { condition } } : e)));
+    setDirty(true);
   }, []);
   const onDeleteEdge = useCallback((id: string) => {
     setEdges((eds) => (eds ?? []).filter((e) => e.id !== id));
     setSelectedEdgeId(null);
+    setDirty(true);
   }, []);
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  async function handleSave() {
+    if (!nodes || !edges) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const spec = specFromCanvas(nodes, edges);
+      await unwrap(
+        api.POST("/workspaces/{workspace_id}/flows/{flow_id}/versions", {
+          params: { path: { workspace_id: workspaceId!, flow_id: flowId } },
+          body: { spec },
+        })
+      );
+      setDirty(false);
+      // Reloads the version just saved, which re-seeds the canvas via the
+      // effect above -- the cheapest way to confirm the round trip actually
+      // took (same mechanism docs/04-frontend-builder.md §8 verified by hand
+      // against the raw API; this is that same check, now live in the UI).
+      await mutateVersions();
+    } catch (e) {
+      setSaveError(e instanceof ApiError ? e.message : "Failed to save version");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   const lookup = useMemo(
     () => ({
@@ -157,10 +201,28 @@ export default function FlowCanvasPage() {
           </Link>
           <h1 className="text-sm font-semibold">{flow?.name ?? "…"}</h1>
         </div>
-        <p className="text-xs text-gray-400">
-          Editing isn't saved yet — Save version and Start a run arrive in the next step
-          (docs/04-frontend-builder.md §9).
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-xs text-gray-400">
+            {saveError ? (
+              <span className="text-red-600">{saveError}</span>
+            ) : saving ? (
+              "Saving…"
+            ) : dirty ? (
+              "Unsaved changes"
+            ) : (
+              "All changes saved"
+            )}
+            {" — "}
+            Version history and Start a run arrive in the next step (docs/04-frontend-builder.md §9).
+          </p>
+          <button
+            onClick={handleSave}
+            disabled={saving || !nodes || !edges}
+            className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save version"}
+          </button>
+        </div>
       </div>
       <div className="flex min-h-0 flex-1">
         <NodePalette />

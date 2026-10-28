@@ -293,10 +293,36 @@ real types to generate from.
    handle positions, confirmed by inspecting the rendered CSS before/after. A good argument
    for always re-reading a file's import list after a full-file rewrite rather than assuming
    a targeted diff.
-6. Edge condition editor (§5) is done as part of step 5 above (the inspector's condition
-   UI and the edge-building logic shipped together — splitting them didn't make sense once
-   writing the inspector). What's left here: Save version wired to `POST .../versions` via
-   `specFromCanvas`.
+6. **Done.** Edge condition editor (§5) was done as part of step 5 above (the inspector's
+   condition UI and the edge-building logic shipped together — splitting them didn't make
+   sense once writing the inspector). What was left here: Save version, wired to `POST
+   .../versions` via `specFromCanvas`. A "Save version" button in the top bar builds the
+   spec from the current canvas state and posts it; the bar's status text switches between
+   "Unsaved changes" / "Saving…" / "All changes saved" / an inline error, tracked by a
+   `dirty` flag set on every real edit (node/edge add, delete, data change, a completed
+   drag, a new connection) and cleared whenever the canvas is (re)seeded from the server —
+   both the initial load and the reload a successful save triggers. That reload is also the
+   verification mechanism: it reads back the version just written, so a broken round trip
+   would show up immediately as the canvas snapping to something wrong, not just as a 201
+   from the API. Also closed a small gap found while building this: the trigger node had no
+   inspector Delete button, but React Flow's own Backspace/Delete keybinding acts on
+   whatever's selected regardless of the inspector — `deletable: false` on trigger nodes
+   (`canvasFromSpec`, `lib/flowSpec.ts`) closes that path too, instead of leaving it to 400
+   against the server's exactly-one-trigger validator.
+
+   Verified in a real browser (same Docker Postgres + API + fake-GoTrue setup): opened a
+   brand-new flow (confirmed "All changes saved" on the untouched single-trigger canvas),
+   dragged on an Agent node (confirmed the status flipped to "Unsaved changes"), selected
+   "Time Teller", dragged it to a deliberate position, clicked Save version (status returned
+   to "All changes saved"), confirmed directly in Postgres that `flow_versions` now had a
+   version 1 row with the agent's `agent_id` set and the exact dragged `ui_position`, then
+   did a hard page reload and confirmed the canvas came back with the same node at the same
+   position from a cold load — the full save/reload round trip, not just the POST. Also
+   confirmed the trigger-node deletion gap: selected the trigger and pressed Backspace (node
+   count stayed at 2, trigger survived), then did the same on the agent node (count dropped
+   to 1, confirming normal nodes are still deletable via the keybinding — only the trigger is
+   protected). `tsc --noEmit`, `npm run build` (11 routes, unchanged), and `npm test` (9
+   tests, unaffected) all clean.
 7. Version picker (load an older version read-only or into the editor — decide which when
    building; loading into the editor and re-saving as a new version is simpler and consistent
    with how the agent version drawer already works, so default to that unless it proves
