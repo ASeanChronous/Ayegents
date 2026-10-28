@@ -350,9 +350,54 @@ real types to generate from.
    Flow (flow)" instead of a raw id; switched back to "An agent" and confirmed that path
    still worked unchanged. `tsc --noEmit`, `npm run build` (11 routes, unchanged — Runs and
    the flow canvas are both existing routes), and `npm test` (9 tests, unaffected) all clean.
-8. End-to-end verification: build a real flow in the browser (trigger → agent → tool, one
-   conditional branch), save it, start a run, confirm the inspector shows every node's step
-   — same verification bar every page in this project has been held to
+8. **Done.** End-to-end verification, scoped: no step in this build order has required a
+   real `ANTHROPIC_API_KEY` before now, since every prior Docker verification pass ran with
+   `ANTHROPIC_API_KEY=sk-ant-dummy` and never reached a real model call. Flow execution does
+   reach one — `_execute_agent_loop` (`services/orchestrator/orchestrator_app/executor.py`)
+   calls `AsyncAnthropic` for the *first* agent node — so a from-scratch run, without a real
+   key, can prove everything up to that call but not what happens after it.
+
+   Built a real flow in the browser via drag-and-drop (not raw API calls): dragged on an
+   Agent node and a Tool node (the seeded `current_time` builtin, no credential needed),
+   wired trigger→agent and agent→tool by dragging between handles, and set a condition on
+   the agent→tool edge (`agent-fa70e553.output.decision`, via the "when" branch control) —
+   the one-conditional-branch part of this step's scope. Saved it; confirmed in Postgres the
+   persisted spec matches exactly (real `agent_id`/`tool_id`, the typed condition string,
+   `ui_position` for both dragged nodes).
+
+   Started a run against the flow from the Runs start-form (the real UI control added in
+   step 7, not a raw POST): the list showed `queued` immediately with `flow_id` set and the
+   flow's name resolved. Ran this with the orchestrator worker live (same Docker network,
+   `ANTHROPIC_API_KEY=sk-ant-dummy`) rather than leaving it unstarted, specifically to see
+   what a real flow run does without a real key instead of leaving that question open: the
+   worker picked up the run within its 2s poll interval, moved it to `running`, and the
+   trigger node passed through with no model call (as `flow_executor.py`'s docstring says).
+   The agent node then hit the real Anthropic auth check and failed fast with a clean 401,
+   which `run_flow`'s `except Exception` caught and surfaced verbatim on the run row. The
+   run inspector showed this correctly: `failed`, the exact `invalid x-api-key` error in the
+   banner, `finished_at` set — no hang, no crash, no stuck `running` state.
+
+   **What this does and doesn't confirm.** Confirmed: the full build→save→run pipeline is
+   correct end to end, including the pieces step 8 names specifically (a real conditional
+   edge persists and round-trips correctly; a flow run is reachable and inspectable from the
+   UI exactly like an agent run). Not confirmed, and not obtainable without a real key: the
+   tool node ever executing, the condition's truthy/falsy branches ever actually being
+   evaluated against a real agent output, or the inspector's per-node step list ever showing
+   more than zero rows for a flow run (no `run_steps` row is written until a node's call
+   completes, and none did here). That last piece — "confirm the inspector shows every
+   node's step" as originally scoped — needs a real `ANTHROPIC_API_KEY` in the Docker
+   environment to close out; flagging it here rather than claiming it's covered.
+
+   **Gap noticed in passing, not part of this step's code:** the run inspector's empty
+   steps state (`app/(app)/runs/[id]/page.tsx`, "No steps yet — they appear here as the
+   orchestrator executes this run") reads fine for an in-progress run but is misleading for
+   a *finished* run with zero steps, like this one — it implies more are still coming. Pre-
+   existing from the inspector's original build, not touched here; worth a one-line fix
+   (branch on `run.status` ∈ {succeeded, failed} to say "no steps were recorded" instead)
+   next time that file is touched, not urgent enough on its own to justify a step for it.
+
+   `tsc --noEmit`, `npm run build` (11 routes, unchanged), and `npm test` (9 tests,
+   unaffected) all clean — no application code changed in this step, verification only.
 
 ## 10. Open items for `05`/later
 
