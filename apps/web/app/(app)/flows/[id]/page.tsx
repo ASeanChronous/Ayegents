@@ -73,39 +73,56 @@ export default function FlowCanvasPage() {
     () => unwrap(api.GET("/workspaces/{workspace_id}/tools", { params: { path: { workspace_id: workspaceId! } } }))
   );
 
-  // versions is ordered newest-first (services/api/app/routers/flows.py), so
-  // [0] is the latest -- the thing this editor loads (§1: "load the latest
-  // version's spec"). Memoized so the seeding effect below only re-runs when
-  // `versions` itself actually changes, not on every render.
-  const latestSpec: FlowSpec | undefined = useMemo(
-    () => (versions === undefined ? undefined : versions.length > 0 ? versions[0].spec : BLANK_SPEC),
-    [versions]
-  );
-
   // Canvas state is owned here, not derived every render -- step 5 makes the
-  // canvas editable, so once seeded from latestSpec it has to survive
-  // re-renders (and SWR revalidation) without snapping back.
+  // canvas editable, so once seeded it has to survive re-renders (and SWR
+  // revalidation) without snapping back.
   const [nodes, setNodes] = useState<FlowCanvasNode[] | null>(null);
   const [edges, setEdges] = useState<FlowCanvasEdge[] | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
+  // Which version the picker (§9 step 7) currently has loaded -- null for a
+  // brand-new flow with no versions yet. Saving always creates version
+  // max+1 regardless of which one is loaded (same pattern the agent version
+  // drawer already uses: load an old version, re-save as a new one, never
+  // overwrite), so this is purely "what's the canvas currently showing,"
+  // not "what will Save write to."
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+
   // Tracks whether the canvas has edits the server doesn't have yet. Set on
   // every real edit (not on mere selection or React Flow's own first-render
   // dimension measurement) and cleared whenever nodes/edges are (re)seeded
-  // from the server -- initial load, or the reload a successful save
-  // triggers below.
+  // from a version -- picking one from the dropdown, the initial load, or
+  // the reload a successful save triggers below.
   const [dirty, setDirty] = useState(false);
 
-  useEffect(() => {
-    if (latestSpec === undefined) return;
-    const { nodes: seededNodes, edges: seededEdges } = canvasFromSpec(latestSpec);
+  const loadSpec = useCallback((spec: FlowSpec) => {
+    const { nodes: seededNodes, edges: seededEdges } = canvasFromSpec(spec);
     setNodes(seededNodes);
     setEdges(seededEdges);
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setDirty(false);
-  }, [latestSpec]);
+  }, []);
+
+  // versions is ordered newest-first (services/api/app/routers/flows.py), so
+  // [0] is the latest. Runs only when `versions` itself changes identity --
+  // the initial load, or a refetch after save -- not when the user merely
+  // picks a different version from the dropdown (that's handleVersionPick
+  // below, which doesn't touch SWR's data at all).
+  useEffect(() => {
+    if (versions === undefined) return;
+    const newest = versions.length > 0 ? versions[0] : null;
+    setSelectedVersionId(newest?.id ?? null);
+    loadSpec(newest?.spec ?? BLANK_SPEC);
+  }, [versions, loadSpec]);
+
+  function handleVersionPick(versionId: string) {
+    const picked = versions?.find((v) => v.id === versionId);
+    if (!picked) return;
+    setSelectedVersionId(versionId);
+    loadSpec(picked.spec);
+  }
 
   const onNodesChange: OnNodesChange<FlowCanvasNode> = useCallback((changes) => {
     setNodes((nds) => applyNodeChanges(changes, nds ?? []));
@@ -202,6 +219,20 @@ export default function FlowCanvasPage() {
           <h1 className="text-sm font-semibold">{flow?.name ?? "…"}</h1>
         </div>
         <div className="flex items-center gap-3">
+          {versions && versions.length > 0 && (
+            <select
+              value={selectedVersionId ?? ""}
+              onChange={(e) => handleVersionPick(e.target.value)}
+              className="rounded-md border border-gray-300 px-2 py-1 text-xs focus:border-gray-500 focus:outline-none"
+              title="Load a version into the editor -- saving always creates a new one, never overwrites"
+            >
+              {versions.map((v) => (
+                <option key={v.id} value={v.id}>
+                  v{v.version} — {new Date(v.created_at).toLocaleString()}
+                </option>
+              ))}
+            </select>
+          )}
           <p className="text-xs text-gray-400">
             {saveError ? (
               <span className="text-red-600">{saveError}</span>
@@ -213,7 +244,7 @@ export default function FlowCanvasPage() {
               "All changes saved"
             )}
             {" — "}
-            Version history and Start a run arrive in the next step (docs/04-frontend-builder.md §9).
+            Start a run arrives in the next step (docs/04-frontend-builder.md §9).
           </p>
           <button
             onClick={handleSave}

@@ -19,6 +19,7 @@ const STATUS_TONES = {
 } as const;
 
 type Agent = { id: string; name: string };
+type Flow = { id: string; name: string };
 type Run = {
   id: string;
   status: string;
@@ -49,9 +50,14 @@ export default function RunsPage() {
     workspaceId ? `/workspaces/${workspaceId}/agents` : null,
     () => unwrap(api.GET("/workspaces/{workspace_id}/agents", { params: { path: { workspace_id: workspaceId! } } }))
   );
+  const { data: flows } = useSWR(
+    workspaceId ? `/workspaces/${workspaceId}/flows` : null,
+    () => unwrap(api.GET("/workspaces/{workspace_id}/flows", { params: { path: { workspace_id: workspaceId! } } }))
+  );
 
   const [startOpen, setStartOpen] = useState(false);
   const agentsById = new Map((agents ?? []).map((a) => [a.id, a]));
+  const flowsById = new Map((flows ?? []).map((f) => [f.id, f]));
 
   if (!workspaceId) {
     return <p className="text-sm text-gray-500">Pick or create a workspace first.</p>;
@@ -86,10 +92,15 @@ export default function RunsPage() {
               ),
             },
             {
-              header: "Agent",
+              header: "Agent / Flow",
               render: (r) =>
-                r.agent_id ? agentsById.get(r.agent_id)?.name ?? r.agent_id.slice(0, 8) : (
-                  <span className="text-gray-400">flow {r.flow_id?.slice(0, 8)}</span>
+                r.agent_id ? (
+                  agentsById.get(r.agent_id)?.name ?? r.agent_id.slice(0, 8)
+                ) : (
+                  <span className="text-gray-600">
+                    {r.flow_id ? flowsById.get(r.flow_id)?.name ?? r.flow_id.slice(0, 8) : "—"}
+                    <span className="ml-1 text-xs text-gray-400">(flow)</span>
+                  </span>
                 ),
             },
             { header: "Status", render: (r) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> },
@@ -99,12 +110,13 @@ export default function RunsPage() {
         />
       )}
 
-      {agents && (
+      {agents && flows && (
         <StartRunDrawer
           open={startOpen}
           onClose={() => setStartOpen(false)}
           workspaceId={workspaceId}
           agents={agents}
+          flows={flows}
           onStarted={() => mutate()}
         />
       )}
@@ -117,15 +129,24 @@ function StartRunDrawer({
   onClose,
   workspaceId,
   agents,
+  flows,
   onStarted,
 }: {
   open: boolean;
   onClose: () => void;
   workspaceId: string;
   agents: Agent[];
+  flows: Flow[];
   onStarted: () => void;
 }) {
+  // Agent is the default target whenever there's at least one agent to pick
+  // -- flows are newer and less likely to be the common case yet, same as
+  // every other page in this app defaulting to the thing that's existed
+  // longer (docs/04-frontend-builder.md §9 step 7: "flow option in the Runs
+  // start-form," additive to the existing agent flow, not replacing it).
+  const [targetType, setTargetType] = useState<"agent" | "flow">(agents.length > 0 ? "agent" : "flow");
   const [agentId, setAgentId] = useState("");
+  const [flowId, setFlowId] = useState("");
   const [input, setInput] = useState("{}");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -147,7 +168,8 @@ function StartRunDrawer({
       await unwrap(
         api.POST("/workspaces/{workspace_id}/runs", {
           params: { path: { workspace_id: workspaceId } },
-          body: { agent_id: agentId, input: parsedInput },
+          body:
+            targetType === "agent" ? { agent_id: agentId, input: parsedInput } : { flow_id: flowId, input: parsedInput },
         })
       );
       onStarted();
@@ -164,33 +186,88 @@ function StartRunDrawer({
     <FormDrawer open={open} onClose={onClose} title="Start a run">
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700" htmlFor="run-agent">
-            Agent
-          </label>
-          {agents.length === 0 ? (
-            <p className="mt-1 text-sm text-gray-500">No agents yet — create one on the Agents page first.</p>
-          ) : (
-            <select
-              id="run-agent"
-              required
-              value={agentId}
-              onChange={(e) => setAgentId(e.target.value)}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+          <span className="block text-sm font-medium text-gray-700">Run</span>
+          <div className="mt-1 flex gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => setTargetType("agent")}
+              className={`flex-1 rounded-md border px-2 py-1 ${
+                targetType === "agent" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-700"
+              }`}
             >
-              <option value="" disabled>
-                Choose an agent…
-              </option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          )}
-          <p className="mt-1 text-xs text-gray-500">
-            Running against an agent with no published version will fail — publish one first.
-          </p>
+              An agent
+            </button>
+            <button
+              type="button"
+              onClick={() => setTargetType("flow")}
+              className={`flex-1 rounded-md border px-2 py-1 ${
+                targetType === "flow" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-700"
+              }`}
+            >
+              A flow
+            </button>
+          </div>
         </div>
+        {targetType === "agent" ? (
+          <div>
+            <label className="block text-sm font-medium text-gray-700" htmlFor="run-agent">
+              Agent
+            </label>
+            {agents.length === 0 ? (
+              <p className="mt-1 text-sm text-gray-500">No agents yet — create one on the Agents page first.</p>
+            ) : (
+              <select
+                id="run-agent"
+                required
+                value={agentId}
+                onChange={(e) => setAgentId(e.target.value)}
+                className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+              >
+                <option value="" disabled>
+                  Choose an agent…
+                </option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <p className="mt-1 text-xs text-gray-500">
+              Running against an agent with no published version will fail — publish one first.
+            </p>
+          </div>
+        ) : (
+          <div>
+            <label className="block text-sm font-medium text-gray-700" htmlFor="run-flow">
+              Flow
+            </label>
+            {flows.length === 0 ? (
+              <p className="mt-1 text-sm text-gray-500">No flows yet — create one on the Flows page first.</p>
+            ) : (
+              <select
+                id="run-flow"
+                required
+                value={flowId}
+                onChange={(e) => setFlowId(e.target.value)}
+                className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+              >
+                <option value="" disabled>
+                  Choose a flow…
+                </option>
+                {flows.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <p className="mt-1 text-xs text-gray-500">
+              Runs the flow's latest saved version — a flow with no saved version will fail, same as an unpublished
+              agent.
+            </p>
+          </div>
+        )}
         <div>
           <label className="block text-sm font-medium text-gray-700" htmlFor="run-input">
             Input (JSON)

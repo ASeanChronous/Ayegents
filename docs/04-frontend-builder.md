@@ -323,10 +323,33 @@ real types to generate from.
    to 1, confirming normal nodes are still deletable via the keybinding — only the trigger is
    protected). `tsc --noEmit`, `npm run build` (11 routes, unchanged), and `npm test` (9
    tests, unaffected) all clean.
-7. Version picker (load an older version read-only or into the editor — decide which when
-   building; loading into the editor and re-saving as a new version is simpler and consistent
-   with how the agent version drawer already works, so default to that unless it proves
-   awkward), flow option in the Runs start-form
+7. **Done.** Version picker: a `<select>` in the canvas top bar lists every version newest
+   first (same `GET .../versions` call already loaded), picking one loads it into the editor
+   via `canvasFromSpec` — not read-only, and saving always creates version max+1 regardless
+   of which one is loaded (the "load into the editor, re-save as new" default this doc
+   picked ahead of time, matching the agent version drawer's own prefill pattern). The
+   seeding logic that used to run once off a `latestSpec` memo is now a small `loadSpec`
+   helper called from two places: an effect keyed on `versions` itself (initial load, or the
+   refetch after a save — both cases should jump to showing the newest version), and
+   `handleVersionPick` for an explicit dropdown choice (which doesn't touch SWR's cache at
+   all, so it can't fight with the other effect). Flow option in the Runs start-form
+   (`app/(app)/runs/page.tsx`): a two-button "An agent" / "A flow" toggle ahead of the
+   existing agent picker, swapping in a flow picker when "A flow" is active; the backend
+   already both accepted `flow_id` in `RunCreate` and enforced exactly-one-of agent/flow
+   server-side, so this was purely additive on the frontend. The run list's "Agent" column
+   is now "Agent / Flow" and resolves a flow run's name the same way it already resolved an
+   agent run's, instead of showing a raw id prefix.
+
+   Verified in a real browser (same Docker setup): saved a flow's v1 (trigger → agent),
+   dragged on a second node and saved again, confirmed the picker showed both versions with
+   v2 auto-selected as newest; picked v1 from the dropdown and confirmed the canvas snapped
+   back to the 2-node spec (not the 3-node one); saved from that loaded v1 and confirmed it
+   became v3 (not an overwrite of v1), again auto-selected. In the Runs start-form: switched
+   the toggle to "A flow," picked the flow, started a run, confirmed in Postgres that the new
+   row had `flow_id` set and `agent_id` null, and confirmed the run list resolved "Step 7
+   Flow (flow)" instead of a raw id; switched back to "An agent" and confirmed that path
+   still worked unchanged. `tsc --noEmit`, `npm run build` (11 routes, unchanged — Runs and
+   the flow canvas are both existing routes), and `npm test` (9 tests, unaffected) all clean.
 8. End-to-end verification: build a real flow in the browser (trigger → agent → tool, one
    conditional branch), save it, start a run, confirm the inspector shows every node's step
    — same verification bar every page in this project has been held to
