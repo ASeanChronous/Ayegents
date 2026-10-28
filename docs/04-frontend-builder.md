@@ -252,9 +252,51 @@ real types to generate from.
    dragging a node pans the canvas instead of moving it, proving `nodesDraggable={false}`
    actually took effect rather than just being set. `tsc --noEmit`, `npm run build` (11
    routes), and `npm test` all clean.
-5. `<NodeInspector>` per node type (§4), node add/delete, edge drag-to-connect
-6. Edge condition editor (§5), Save version wired to `POST .../versions` via
-   `specFromCanvas`
+5. **Done.** `<NodeInspector>` (`components/flows/NodeInspector.tsx`) per node type (§4):
+   trigger gets a static explanation (no delete — it's the one node that can't be removed);
+   agent/tool get a picker plus the `input_map` dropdown (§4, populated from the node's
+   actual incoming edges, not every node in the flow); tool also gets the JSON config
+   textarea (same pattern as the agent version drawer's tool checklist), buffered in local
+   state so invalid JSON shows an inline error instead of corrupting `config` or crashing;
+   conditional/merge get a label-only note. `FlowCanvas` is now fully controlled
+   (`nodesDraggable`/`nodesConnectable` on, `onNodesChange`/`onEdgesChange`/`onConnect`
+   forwarded to state the page owns) and `<NodePalette>`'s four entries are real HTML5
+   drag sources — dropping one calls `screenToFlowPosition` and `createCanvasNode` (new in
+   `lib/flowSpec.ts`) to add it. Deleting a node (the inspector's Delete button, or the
+   default Backspace/Delete keybinding React Flow gives selected nodes/edges) also removes
+   any edges touching it, not just the node.
+
+   Verified in a real browser (same Docker Postgres + API + fake-GoTrue setup every pass in
+   this project has used): dragged an Agent node from the palette onto the canvas, selected
+   it, picked "Time Teller" from the inspector's agent dropdown and watched the canvas node's
+   title update live; dragged trigger → agent to drag-connect an edge, confirmed the agent's
+   `input_map` dropdown immediately offered the trigger as a source once the edge existed;
+   selected that edge and built a condition through the three controls (when/unless toggle,
+   the read-only source-node label, the key-path input), confirming the live preview text and
+   that deselecting and reselecting the edge correctly re-parsed the condition back into the
+   same toggle/key-path state; added a Tool node, selected `current_time`, typed intentionally
+   broken JSON into the config textarea and confirmed the inline "Invalid JSON" error with no
+   crash, then fixed it and confirmed the error cleared; deleted the agent node and confirmed
+   its edge to the trigger disappeared with it (0 edges, 2 nodes left). `tsc --noEmit`,
+   `npm run build` (11 routes, unchanged), and `npm test` (9 tests, unaffected) all clean.
+
+   One real bug found and fixed during this pass, unrelated to the interactivity work itself:
+   rewriting `FlowCanvas.tsx` to add the controlled-state props dropped the
+   `import "@xyflow/react/dist/style.css"` line step 4 had. React Flow degrades silently
+   without it — nodes/edges still render (via Tailwind classes and inline SVG), but anything
+   relying on the library's own stylesheet does not: handles came out `position: static`
+   instead of absolutely positioned on each node's edge, which didn't block drag-to-connect
+   outright but made handles land in the wrong spot and made the whole canvas look subtly
+   broken (no connection-line styling, no proper z-stacking). Caught via the dev console's
+   own `[React Flow]: It seems that you haven't loaded the styles` warning plus a `position:
+   static` check on a handle element — restoring the import fixed both the warning and the
+   handle positions, confirmed by inspecting the rendered CSS before/after. A good argument
+   for always re-reading a file's import list after a full-file rewrite rather than assuming
+   a targeted diff.
+6. Edge condition editor (§5) is done as part of step 5 above (the inspector's condition
+   UI and the edge-building logic shipped together — splitting them didn't make sense once
+   writing the inspector). What's left here: Save version wired to `POST .../versions` via
+   `specFromCanvas`.
 7. Version picker (load an older version read-only or into the editor — decide which when
    building; loading into the editor and re-saving as a new version is simpler and consistent
    with how the agent version drawer already works, so default to that unless it proves

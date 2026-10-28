@@ -123,6 +123,18 @@ export function canvasFromSpec(spec: FlowSpec): { nodes: FlowCanvasNode[]; edges
   return { nodes, edges };
 }
 
+/** A fresh node for the palette's drop-to-add (docs/04-frontend-builder.md §7) -- never
+ * `type: "trigger"`, since the palette itself doesn't offer that entry (§4: exactly one
+ * trigger per flow, enforced client-side by never letting a second one be created). */
+export function createCanvasNode(type: FlowNodeType, position: XYPosition): FlowCanvasNode {
+  return {
+    id: `${type}-${crypto.randomUUID().slice(0, 8)}`,
+    type,
+    position,
+    data: { agentId: null, toolId: null, config: {} },
+  };
+}
+
 export function specFromCanvas(nodes: FlowCanvasNode[], edges: FlowCanvasEdge[]): FlowSpec {
   return {
     nodes: nodes.map((node) => ({

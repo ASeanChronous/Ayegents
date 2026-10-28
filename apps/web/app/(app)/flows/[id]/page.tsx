@@ -1,15 +1,32 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import useSWR from "swr";
+import {
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+  type OnConnect,
+  type OnEdgesChange,
+  type OnNodesChange,
+  type OnSelectionChangeFunc,
+} from "@xyflow/react";
 
 import { api, unwrap } from "@/lib/api";
 import { useWorkspace } from "@/lib/useWorkspace";
-import { canvasFromSpec, type FlowSpec } from "@/lib/flowSpec";
+import {
+  canvasFromSpec,
+  createCanvasNode,
+  type FlowCanvasEdge,
+  type FlowCanvasNode,
+  type FlowNodeType,
+  type FlowSpec,
+} from "@/lib/flowSpec";
 import { FlowCanvas } from "@/components/flows/FlowCanvas";
 import { NodePalette } from "@/components/flows/NodePalette";
+import { NodeInspector } from "@/components/flows/NodeInspector";
 import { FlowLookupProvider } from "@/components/flows/FlowLookupContext";
 
 type Agent = { id: string; name: string };
@@ -56,12 +73,65 @@ export default function FlowCanvasPage() {
   );
 
   // versions is ordered newest-first (services/api/app/routers/flows.py), so
-  // [0] is the latest -- the thing this read-only preview loads (§1: "load
-  // the latest version's spec").
-  const latestSpec: FlowSpec | undefined =
-    versions === undefined ? undefined : versions.length > 0 ? versions[0].spec : BLANK_SPEC;
+  // [0] is the latest -- the thing this editor loads (§1: "load the latest
+  // version's spec"). Memoized so the seeding effect below only re-runs when
+  // `versions` itself actually changes, not on every render.
+  const latestSpec: FlowSpec | undefined = useMemo(
+    () => (versions === undefined ? undefined : versions.length > 0 ? versions[0].spec : BLANK_SPEC),
+    [versions]
+  );
 
-  const { nodes, edges } = useMemo(() => canvasFromSpec(latestSpec ?? BLANK_SPEC), [latestSpec]);
+  // Canvas state is owned here, not derived every render -- step 5 makes the
+  // canvas editable, so once seeded from latestSpec it has to survive
+  // re-renders (and SWR revalidation) without snapping back.
+  const [nodes, setNodes] = useState<FlowCanvasNode[] | null>(null);
+  const [edges, setEdges] = useState<FlowCanvasEdge[] | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (latestSpec === undefined) return;
+    const { nodes: seededNodes, edges: seededEdges } = canvasFromSpec(latestSpec);
+    setNodes(seededNodes);
+    setEdges(seededEdges);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  }, [latestSpec]);
+
+  const onNodesChange: OnNodesChange<FlowCanvasNode> = useCallback(
+    (changes) => setNodes((nds) => applyNodeChanges(changes, nds ?? [])),
+    []
+  );
+  const onEdgesChange: OnEdgesChange<FlowCanvasEdge> = useCallback(
+    (changes) => setEdges((eds) => applyEdgeChanges(changes, eds ?? [])),
+    []
+  );
+  const onConnect: OnConnect = useCallback(
+    (connection) => setEdges((eds) => addEdge({ ...connection, data: { condition: null } }, eds ?? [])),
+    []
+  );
+  const onSelectionChange: OnSelectionChangeFunc = useCallback(({ nodes: selNodes, edges: selEdges }) => {
+    setSelectedNodeId(selNodes[0]?.id ?? null);
+    setSelectedEdgeId(selEdges[0]?.id ?? null);
+  }, []);
+  const onAddNode = useCallback((type: FlowNodeType, position: { x: number; y: number }) => {
+    setNodes((nds) => [...(nds ?? []), createCanvasNode(type, position)]);
+  }, []);
+  const onUpdateNodeData = useCallback((id: string, data: FlowCanvasNode["data"]) => {
+    setNodes((nds) => (nds ?? []).map((n) => (n.id === id ? { ...n, data } : n)));
+  }, []);
+  const onDeleteNode = useCallback((id: string) => {
+    setNodes((nds) => (nds ?? []).filter((n) => n.id !== id));
+    setEdges((eds) => (eds ?? []).filter((e) => e.source !== id && e.target !== id));
+    setSelectedNodeId(null);
+  }, []);
+  const onUpdateEdgeCondition = useCallback((id: string, condition: string | null) => {
+    setEdges((eds) => (eds ?? []).map((e) => (e.id === id ? { ...e, data: { condition } } : e)));
+  }, []);
+  const onDeleteEdge = useCallback((id: string) => {
+    setEdges((eds) => (eds ?? []).filter((e) => e.id !== id));
+    setSelectedEdgeId(null);
+  }, []);
 
   const lookup = useMemo(
     () => ({
@@ -75,6 +145,9 @@ export default function FlowCanvasPage() {
     return <p className="p-6 text-sm text-gray-500">Pick or create a workspace first.</p>;
   }
 
+  const selectedNode = nodes?.find((n) => n.id === selectedNodeId) ?? null;
+  const selectedEdge = edges?.find((e) => e.id === selectedEdgeId) ?? null;
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4 py-2">
@@ -85,26 +158,47 @@ export default function FlowCanvasPage() {
           <h1 className="text-sm font-semibold">{flow?.name ?? "…"}</h1>
         </div>
         <p className="text-xs text-gray-400">
-          Read-only preview — editing, saving, and running arrive in the next steps
+          Editing isn't saved yet — Save version and Start a run arrive in the next step
           (docs/04-frontend-builder.md §9).
         </p>
       </div>
       <div className="flex min-h-0 flex-1">
         <NodePalette />
         <div className="min-w-0 flex-1">
-          {latestSpec === undefined ? (
+          {nodes === null || edges === null ? (
             <p className="p-6 text-sm text-gray-500">Loading…</p>
           ) : (
             <FlowLookupProvider value={lookup}>
-              <FlowCanvas nodes={nodes} edges={edges} />
+              <FlowCanvas
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onSelectionChange={onSelectionChange}
+                onAddNode={onAddNode}
+              />
             </FlowLookupProvider>
           )}
         </div>
-        <div className="w-64 flex-shrink-0 border-l border-gray-200 bg-white p-3">
+        <div className="w-72 flex-shrink-0 overflow-y-auto border-l border-gray-200 bg-white p-3">
           <h2 className="text-xs font-medium uppercase tracking-wide text-gray-500">Inspector</h2>
-          <p className="mt-2 text-sm text-gray-400">
-            Selecting a node or edge will show its settings here — arriving in the next step.
-          </p>
+          <div className="mt-2">
+            <FlowLookupProvider value={lookup}>
+              <NodeInspector
+                selectedNode={selectedNode}
+                selectedEdge={selectedEdge}
+                nodes={nodes ?? []}
+                edges={edges ?? []}
+                agents={agents ?? []}
+                tools={tools ?? []}
+                onUpdateNodeData={onUpdateNodeData}
+                onDeleteNode={onDeleteNode}
+                onUpdateEdgeCondition={onUpdateEdgeCondition}
+                onDeleteEdge={onDeleteEdge}
+              />
+            </FlowLookupProvider>
+          </div>
         </div>
       </div>
     </div>
