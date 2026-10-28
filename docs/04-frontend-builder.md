@@ -406,8 +406,10 @@ real types to generate from.
   takes a spec directly instead of loading one from `flow_versions`
 - ~~Canvas-level auto-layout beyond "new node with no position yet" (§7), undo/redo,
   multi-select~~ **Done** — see below.
-- Marketplace flow listings, once `marketplace.py`'s flow-listing gap closes (deliberate
-  scope cut, not a bug — see that file's own docstring)
+- ~~Marketplace flow listings, once `marketplace.py`'s flow-listing gap closes~~ **Done** —
+  see below. (Backend-only: there's still no marketplace storefront UI — `05-frontend-
+  marketplace.md` per `03-frontend.md` §8 — this just closes the gap that doc's own
+  endpoints already had.)
 
 ### Canvas UX polish (undo/redo, multi-select, auto-layout)
 
@@ -535,3 +537,72 @@ plain-language message in the drawer instead of a console-only exception.
 
 `tsc --noEmit`, `npm run build` (11 routes, unchanged — Triggers is a drawer on the
 existing flow page, not a new route), and `npm test` (9 tests, unaffected) all clean.
+
+### Marketplace flow listings
+
+Backend-only, entirely inside `services/api/app/routers/marketplace.py` (and a one-field
+addition to `listings.py`, the public browse router) — no frontend work, since there's
+still no marketplace storefront UI to drive it from (`03-frontend.md` §8's
+`05-frontend-marketplace.md` is still unbuilt). `marketplace.py`'s own docstring already
+explained this was a deliberate scope cut, not a bug: a flow's spec references agent
+nodes by `agent_id`, and installing one means recursively forking every agent it depends
+on — real work, not an oversight. This closes that gap.
+
+The schema already modeled a flow listing as a first-class case — `listings.source_flow_id`
+(xor `source_agent_id`, a check constraint) and `installs.installed_flow_id` both existed
+in `0001_init_schema.sql` from day one — so no migration was needed, only the router logic
+`marketplace.py`'s docstring said was missing:
+
+- `ListingCreate` now accepts `source_flow_id` as an alternative to `source_agent_id`,
+  enforced as an xor by a pydantic `model_validator` (422 if neither or both are given) —
+  the same shape the schema's own check constraint already enforces at the DB layer, just
+  surfaced as a clean validation error before a bad insert is even attempted.
+- **Publish** (`_flow_listing_spec`, new): snapshots the flow's latest `flow_versions.spec`
+  verbatim (node ids, edges, everything — `flow_executor.py` needs the real shape back at
+  run time), then, for every distinct `agent_id` an `agent` node references, snapshots that
+  agent the same way the plain agent-listing path always has
+  (`_agent_listing_snapshot`, extracted from the pre-existing inline code so both paths
+  share one set of checks) — including this module's existing no-subagents and
+  global-tools-only rules, now phrased per-agent instead of "the one agent this listing
+  is." For every distinct `tool_id` a `tool` node references *directly* (bypassing any
+  agent), the same global-tools-only check applies — a flow's own tool node is a new way to
+  reach a workspace-private tool that the agent-only version of this file never had to
+  consider. `required_tool_categories` is the union of every agent's tool categories and
+  every direct tool node's category, still derived rather than self-declared.
+- **Install** (`_install_agent_snapshot`, extracted the same way): forks one new agent (new
+  `agents`/`agent_versions`/`agent_version_tools` rows) per distinct agent snapshot the
+  publish step recorded, resolving each tool by `(kind, key)` against the installing
+  workspace's global tools — the same lookup the plain agent install already did, just run
+  once per referenced agent instead of once total. The installed flow's spec is the
+  published `flow_spec` with every `agent` node's `agent_id` rewritten to its newly-forked
+  counterpart; `tool` nodes are left untouched, since a global tool's row (and id) is the
+  same one shared row in every workspace — there's nothing to fork. The whole install still
+  runs inside one transaction, so a tool that's gone missing from the platform since
+  publish time rolls back every agent already forked in that same install, not just the one
+  that hit it.
+- `listings.py` (the public browse/get router) gained a derived `kind: "agent" | "flow"`
+  field (a one-line `case` in the query) — unused by anything yet, same as the rest of that
+  router, but a storefront UI browsing listings that can now be either kind needs some way
+  to tell them apart without inspecting `required_tool_categories` to guess.
+
+Verified against the real Docker Postgres + API setup (no orchestrator needed — nothing
+here starts a run). Built two agents in a publisher workspace, each with one global tool
+attached (`current_time`, `run_python` — the two builtin tools `0002`/`0003` seed), wired
+them into a flow alongside a third node that references a global tool *directly* (no
+agent in between), and published it as a flow listing — confirmed
+`required_tool_categories` came back as the union of all three (`builtin:current_time`
+from both the agent and the direct tool node, deduplicated, plus `code_exec:run_python`).
+Installed it into a second workspace: confirmed a partial tool-category approval still
+403s (unchanged from the agent-listing path), and a full approval produced one new flow
+and two new agents in the installing workspace, with the flow's `agent` nodes correctly
+rewritten to the new agents' ids and its `tool` node left pointing at the original global
+tool row. Confirmed the existing plain-agent-listing path (publish + install) still works
+unchanged after the refactor into shared helpers. Confirmed both new-to-flows rejections:
+republishing after attaching a sub-agent to one of the flow's agents 400s with
+"delegates to sub-agents," and a flow referencing a workspace-private tool node 400s with
+"only global tools can appear in a listing." Confirmed `ListingCreate`'s xor validator
+422s on both "neither source" and "both sources."
+
+No application-level tests exist for `services/api` (this project verifies the API via
+Docker + curl/browser, not a pytest suite) and no frontend code touches these endpoints
+yet, so there's nothing to typecheck or run beyond the manual verification above.

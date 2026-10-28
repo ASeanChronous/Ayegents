@@ -11,6 +11,7 @@ router = APIRouter(prefix="/marketplace/listings", tags=["marketplace"])
 
 class ListingOut(BaseModel):
     id: UUID
+    kind: str
     name: str
     description: str | None
     category: str | None
@@ -19,12 +20,18 @@ class ListingOut(BaseModel):
     required_tool_categories: list[str]
 
 
+# source_agent_id/source_flow_id is a storage-level xor (the schema's check
+# constraint, 0001_init_schema.sql) -- browsing/installing only cares about it
+# as a one-word "kind" to pick a label or icon by, not which column is set.
+_KIND_SQL = "case when source_agent_id is not null then 'agent' else 'flow' end as kind"
+
+
 @router.get("", response_model=list[ListingOut])
 async def browse_listings(category: str | None = None, user_id: UUID = Depends(get_current_user_id)):
     pool = await get_pool()
     rows = await pool.fetch(
-        """
-        select id, name, description, category, install_count, rating_avg, required_tool_categories
+        f"""
+        select id, {_KIND_SQL}, name, description, category, install_count, rating_avg, required_tool_categories
         from listings
         where status = 'published' and ($1::text is null or category = $1)
         order by install_count desc
@@ -38,8 +45,8 @@ async def browse_listings(category: str | None = None, user_id: UUID = Depends(g
 async def get_listing(listing_id: UUID, user_id: UUID = Depends(get_current_user_id)):
     pool = await get_pool()
     row = await pool.fetchrow(
-        """
-        select id, name, description, category, install_count, rating_avg, required_tool_categories
+        f"""
+        select id, {_KIND_SQL}, name, description, category, install_count, rating_avg, required_tool_categories
         from listings
         where id = $1 and status = 'published'
         """,
