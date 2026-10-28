@@ -145,6 +145,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/flows/{flow_id}/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Triggers */
+        get: operations["list_triggers_workspaces__workspace_id__flows__flow_id__triggers_get"];
+        put?: never;
+        /** Create Trigger */
+        post: operations["create_trigger_workspaces__workspace_id__flows__flow_id__triggers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/flows/{flow_id}/triggers/{trigger_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Trigger */
+        delete: operations["delete_trigger_workspaces__workspace_id__flows__flow_id__triggers__trigger_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Trigger */
+        patch: operations["update_trigger_workspaces__workspace_id__flows__flow_id__triggers__trigger_id__patch"];
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/tools": {
         parameters: {
             query?: never;
@@ -317,6 +353,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/{trigger_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fire Webhook */
+        post: operations["fire_webhook_webhooks__trigger_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -454,6 +507,11 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+        };
+        /** DeleteOut */
+        DeleteOut: {
+            /** Deleted */
+            deleted: boolean;
         };
         /** FlowCreate */
         FlowCreate: {
@@ -773,6 +831,49 @@ export interface components {
             requires_credential: boolean;
             /** Allowed Hosts */
             allowed_hosts: string[] | null;
+        };
+        /** TriggerCreate */
+        TriggerCreate: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "manual" | "webhook" | "schedule";
+            /** Cron */
+            cron?: string | null;
+        };
+        /** TriggerOut */
+        TriggerOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "manual" | "webhook" | "schedule";
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Enabled */
+            enabled: boolean;
+            /** Last Fired At */
+            last_fired_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** TriggerUpdate */
+        TriggerUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Cron */
+            cron?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1261,6 +1362,144 @@ export interface operations {
             };
         };
     };
+    list_triggers_workspaces__workspace_id__flows__flow_id__triggers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                flow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_trigger_workspaces__workspace_id__flows__flow_id__triggers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                flow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_trigger_workspaces__workspace_id__flows__flow_id__triggers__trigger_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                flow_id: string;
+                trigger_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_trigger_workspaces__workspace_id__flows__flow_id__triggers__trigger_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                flow_id: string;
+                trigger_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_tools_workspaces__workspace_id__tools_get: {
         parameters: {
             query?: never;
@@ -1644,6 +1883,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstallOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fire_webhook_webhooks__trigger_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-webhook-secret"?: string | null;
+            };
+            path: {
+                trigger_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

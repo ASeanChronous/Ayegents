@@ -10,6 +10,7 @@ dependencies = [
   "httpx>=0.27",
   "e2b-code-interpreter>=1.0",
   "langgraph>=1.0",  # verified against 1.2.16, the current release as of this writing
+  "croniter>=2.0",  # computes a schedule trigger's next fire time (scheduler.py)
 ]
 
 [project.optional-dependencies]

@@ -30,6 +30,7 @@ import { FlowCanvas } from "@/components/flows/FlowCanvas";
 import { NodePalette } from "@/components/flows/NodePalette";
 import { NodeInspector } from "@/components/flows/NodeInspector";
 import { FlowLookupProvider } from "@/components/flows/FlowLookupContext";
+import { TriggersDrawer } from "@/components/flows/TriggersDrawer";
 
 type Agent = { id: string; name: string };
 type Tool = { id: string; key: string };
@@ -318,6 +319,7 @@ export default function FlowCanvasPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [triggersOpen, setTriggersOpen] = useState(false);
 
   async function handleSave() {
     if (!nodes || !edges) return;
@@ -383,6 +385,12 @@ export default function FlowCanvasPage() {
               ))}
             </select>
           )}
+          <button
+            onClick={() => setTriggersOpen(true)}
+            className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Triggers
+          </button>
           <div className="flex items-center gap-1">
             <button
               onClick={handleUndo}
@@ -469,6 +477,12 @@ export default function FlowCanvasPage() {
           </div>
         </div>
       </div>
+      <TriggersDrawer
+        open={triggersOpen}
+        onClose={() => setTriggersOpen(false)}
+        workspaceId={workspaceId}
+        flowId={flowId}
+      />
     </div>
   );
 }

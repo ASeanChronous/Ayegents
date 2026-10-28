@@ -12,6 +12,7 @@ dependencies = [
   "cryptography>=43.0",
   "httpx>=0.27",
   "pyjwt>=2.9",
+  "croniter>=2.0",  # validates a schedule trigger's cron expression at create/update time (routers/triggers.py)
 ]
 
 [project.optional-dependencies]

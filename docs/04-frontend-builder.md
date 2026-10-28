@@ -401,8 +401,7 @@ real types to generate from.
 
 ## 10. Open items for `05`/later
 
-- Webhook/schedule triggers (the `triggers` table) — real backend work (receiving webhooks,
-  a scheduler) before there's anything for the canvas's trigger node to configure
+- ~~Webhook/schedule triggers (the `triggers` table)~~ **Done** — see below.
 - True draft dry-run (execute an unsaved spec) — needs an orchestrator entry point that
   takes a spec directly instead of loading one from `flow_versions`
 - ~~Canvas-level auto-layout beyond "new node with no position yet" (§7), undo/redo,
@@ -463,4 +462,76 @@ already owned (`nodes`/`edges` in `app/(app)/flows/[id]/page.tsx`).
   confirmed in Postgres the persisted spec matched exactly what survived on the canvas.
   `tsc --noEmit`, `npm run build` (11 routes, unchanged), and `npm test` (9 tests,
   unaffected) all clean.
-- Marketplace flow listings, once `marketplace.py`'s flow-listing gap closes
+
+### Webhook/schedule triggers
+
+The `triggers` table (`0001_init_schema.sql`) and `runs.trigger_id` already existed —
+nothing about the schema needed inventing, just the router, the public firing endpoint,
+and a scheduler to decide when a schedule trigger is due. One migration
+(`0005_trigger_last_fired.sql`) adds `triggers.last_fired_at`, the one real gap: a cron
+schedule needs an anchor timestamp to compute its *next* fire from, and nothing recorded
+one. Both webhook and schedule config live in `triggers.config` jsonb per
+`docs/02-schema.md` §3's own "webhook secret, cron expr, etc." — no new secrets-split
+table the way tool credentials get one; a webhook secret only has to be hard to guess, not
+survive the same threat model as a third-party API key.
+
+A trigger is flow-level config for *how a run starts*, deliberately kept separate from the
+canvas's own trigger node, which still only ever seeds a run's input regardless of what
+started it (`services/api/app/routers/triggers.py`'s own docstring has the full reasoning).
+That's why triggers get their own drawer (`TriggersDrawer.tsx`, opened from a "Triggers"
+button in the flow page's top bar) instead of a form on the trigger node itself — the
+NodeInspector's trigger panel text now says as much instead of the old "later phase" note.
+
+- **`services/api/app/routers/triggers.py`** — authenticated CRUD under
+  `/workspaces/{workspace_id}/flows/{flow_id}/triggers`. `kind` is `manual` | `webhook` |
+  `schedule` (the schema's fourth kind, `agent_event`, is still out of scope — nothing in
+  this open item named it, and it needs flow-to-flow wiring this project hasn't designed).
+  A webhook's secret is always server-generated (`secrets.token_urlsafe(32)`), never
+  caller-supplied. A schedule's cron expression is validated with `croniter.is_valid` at
+  both create and update time, rejected with a 400 before it ever reaches the scheduler.
+- **`services/api/app/routers/webhooks.py`** — the public side, `POST /webhooks/{trigger_id}`,
+  deliberately outside `/workspaces/...` and `get_current_user_id`: the caller is an
+  external system, not a logged-in member. Validated by an `X-Webhook-Secret` header
+  against `config.secret`; a missing trigger, a non-webhook trigger, and a wrong secret
+  all return the *same* 404, so a guessed trigger id can't be confirmed as real without
+  also knowing its secret. Starts a run exactly the way `POST .../runs` does — insert into
+  `runs`, hand off via `run_queue` — just reached from a different front door.
+- **`services/orchestrator/orchestrator_app/scheduler.py`** — runs as a second
+  `asyncio` task in the existing orchestrator process (`main.py`'s `asyncio.gather`), not a
+  separate deployable, since it only ever creates `run_queue` rows and never consumes them.
+  Polls every `schedule_poll_interval_seconds` (30s default — a schedule's own granularity
+  is minutes, so checking as often as the 2s run-queue poll would be pure waste), and for
+  each enabled schedule trigger checks whether `croniter`'s next fire time after
+  `last_fired_at` (or `created_at`, if it has never fired) has passed. `for update of t
+  skip locked` on the `triggers` row — not just on `run_queue`, which only governs runs
+  already created — is what stops two orchestrator replicas from both firing the same due
+  trigger twice.
+
+Verified against the real Docker Postgres + API + orchestrator setup (the orchestrator
+container specifically, not just API — this is the first open item in this phase that
+needed it running against real trigger rows). Created a webhook trigger from the UI,
+fired it with `curl` using the exact URL/secret shown, confirmed the resulting `runs` row
+had the right `flow_id`/`trigger_id`/`input`, confirmed a missing/wrong secret and a
+nonexistent trigger id all return the identical 404, and confirmed disabling the trigger
+turns a correct request into a 409 ("trigger is disabled") rather than silently succeeding
+or 404ing. Created a schedule trigger with `* * * * *` from the UI, started the
+orchestrator with `SCHEDULE_POLL_INTERVAL_SECONDS=5` for a fast feedback loop, and watched
+it fire exactly once per real minute boundary (confirmed no double-fire across several 5s
+poll ticks inside the same minute, and a genuine second fire at the next boundary) — both
+fires correctly failed with "flow has no published version" until a version was saved,
+then a re-fired webhook run went all the way to `succeeded` with `node_outputs` carrying
+the webhook body through.
+
+**Bug found and fixed during this pass:** deleting a trigger that already has runs
+referencing it (`runs.trigger_id`, no `ON DELETE` clause in `0001_init_schema.sql`) raised
+`asyncpg.exceptions.ForeignKeyViolationError`, surfaced to the browser as a raw, CORS-less
+500 — the frontend's delete button looked like it silently did nothing. Fixed by catching
+that specific exception in `delete_trigger` and returning a clean 409 pointing at the
+right alternative ("disable it instead," which is also the semantically correct move —
+deleting only ever made sense for a trigger that never fired). Also added an `actionError`
+state to `TriggersDrawer` for toggle/delete failures generally, which had no error surface
+at all before this (only the add-trigger form did) — confirmed the 409 now renders as a
+plain-language message in the drawer instead of a console-only exception.
+
+`tsc --noEmit`, `npm run build` (11 routes, unchanged — Triggers is a drawer on the
+existing flow page, not a new route), and `npm test` (9 tests, unaffected) all clean.

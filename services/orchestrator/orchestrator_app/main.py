@@ -5,6 +5,11 @@ run_queue — deliberately not pg-boss (its client is Node-only) and not Redis
 (one less paid/managed service, architecture doc §9). Multiple orchestrator
 replicas can run this same loop concurrently; SKIP LOCKED means they never
 race on the same run.
+
+Runs scheduler.py's schedule-trigger poll as a second task in this same
+process/pool (main() below) rather than a separate deployable -- it only
+ever *creates* run_queue rows, never consumes them, so there's no reason for
+it to be anything other than one more thing this process does.
 """
 
 import asyncio
@@ -16,6 +21,7 @@ import asyncpg
 from orchestrator_app.config import settings
 from orchestrator_app.executor import run_single_agent
 from orchestrator_app.flow_executor import run_flow
+from orchestrator_app.scheduler import scheduler_loop
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("orchestrator")
@@ -71,20 +77,32 @@ async def process_run(pool: asyncpg.Pool, run_id) -> None:
         await conn.execute("delete from run_queue where run_id = $1", run_id)
 
 
+async def run_queue_loop(pool: asyncpg.Pool) -> None:
+    while True:
+        claimed = await claim_next_run(pool)
+        if claimed is None:
+            await asyncio.sleep(settings.poll_interval_seconds)
+            continue
+        log.info("processing run %s", claimed["run_id"])
+        try:
+            await process_run(pool, claimed["run_id"])
+        except Exception:  # noqa: BLE001 — log and keep polling, don't crash the worker
+            log.exception("run %s failed", claimed["run_id"])
+
+
 async def main() -> None:
     pool = await asyncpg.create_pool(settings.database_url, init=_init_connection)
-    log.info("orchestrator %s started, polling every %.1fs", settings.worker_id, settings.poll_interval_seconds)
+    log.info(
+        "orchestrator %s started, polling runs every %.1fs and schedule triggers every %.1fs",
+        settings.worker_id,
+        settings.poll_interval_seconds,
+        settings.schedule_poll_interval_seconds,
+    )
     try:
-        while True:
-            claimed = await claim_next_run(pool)
-            if claimed is None:
-                await asyncio.sleep(settings.poll_interval_seconds)
-                continue
-            log.info("processing run %s", claimed["run_id"])
-            try:
-                await process_run(pool, claimed["run_id"])
-            except Exception:  # noqa: BLE001 — log and keep polling, don't crash the worker
-                log.exception("run %s failed", claimed["run_id"])
+        await asyncio.gather(
+            run_queue_loop(pool),
+            scheduler_loop(pool, settings.schedule_poll_interval_seconds),
+        )
     finally:
         await pool.close()
 

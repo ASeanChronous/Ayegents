@@ -228,8 +228,9 @@ function NodePanel({
     return (
       <PanelShell title="Trigger">
         <p className="text-sm text-gray-500">
-          This flow starts here, seeded with the run's input. There's nothing to configure in this version — webhook
-          and schedule triggers are a later phase (docs/04-frontend-builder.md §10).
+          This flow starts here, seeded with the run's input — the same way whether the run was started by hand,
+          by a webhook, or on a schedule. Nothing to configure on this node itself; set up webhook/schedule triggers
+          from the "Triggers" button in the top bar.
         </p>
       </PanelShell>
     );
