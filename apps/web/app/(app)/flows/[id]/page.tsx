@@ -31,6 +31,7 @@ import { NodePalette } from "@/components/flows/NodePalette";
 import { NodeInspector } from "@/components/flows/NodeInspector";
 import { FlowLookupProvider } from "@/components/flows/FlowLookupContext";
 import { TriggersDrawer } from "@/components/flows/TriggersDrawer";
+import { TestRunDrawer } from "@/components/flows/TestRunDrawer";
 
 type Agent = { id: string; name: string };
 type Tool = { id: string; key: string };
@@ -320,6 +321,7 @@ export default function FlowCanvasPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [triggersOpen, setTriggersOpen] = useState(false);
+  const [testRunOpen, setTestRunOpen] = useState(false);
 
   async function handleSave() {
     if (!nodes || !edges) return;
@@ -390,6 +392,14 @@ export default function FlowCanvasPage() {
             className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
           >
             Triggers
+          </button>
+          <button
+            onClick={() => setTestRunOpen(true)}
+            disabled={!nodes || !edges}
+            title="Run the canvas exactly as it is now, without saving a version first"
+            className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Test run
           </button>
           <div className="flex items-center gap-1">
             <button
@@ -482,6 +492,13 @@ export default function FlowCanvasPage() {
         onClose={() => setTriggersOpen(false)}
         workspaceId={workspaceId}
         flowId={flowId}
+      />
+      <TestRunDrawer
+        open={testRunOpen}
+        onClose={() => setTestRunOpen(false)}
+        workspaceId={workspaceId}
+        flowId={flowId}
+        spec={nodes && edges ? specFromCanvas(nodes, edges) : null}
       />
     </div>
   );

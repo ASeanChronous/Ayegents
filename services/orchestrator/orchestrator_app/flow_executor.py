@@ -51,16 +51,25 @@ class FlowState(TypedDict):
 async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
     async with pool.acquire() as conn:
         run = await conn.fetchrow("select * from runs where id = $1", run_id)
-        if run["flow_version_id"]:
+        if run["draft_spec"] is not None:
+            # A true draft dry-run (docs/04-frontend-builder.md §10): the
+            # canvas's own nodes/edges, handed straight to execute_flow below
+            # exactly as the API received them -- never written to
+            # flow_versions, so there's nothing to look up here at all.
+            spec = run["draft_spec"]
+        elif run["flow_version_id"]:
             flow_version = await conn.fetchrow(
                 "select * from flow_versions where id = $1", run["flow_version_id"]
             )
+            spec = flow_version["spec"] if flow_version else None
         else:
             flow_version = await conn.fetchrow(
                 "select * from flow_versions where flow_id = $1 order by version desc limit 1",
                 run["flow_id"],
             )
-        if flow_version is None:
+            spec = flow_version["spec"] if flow_version else None
+
+        if spec is None:
             await conn.execute(
                 """
                 update runs set status = 'failed', error = 'flow has no published version', finished_at = now()
@@ -92,7 +101,7 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
             pool,
             run_id=run_id,
             workspace_id=run["workspace_id"],
-            spec=flow_version["spec"],
+            spec=spec,
             initial_input=run["input"],
             max_steps_per_agent_node=limits["max_steps_per_run"],
         )

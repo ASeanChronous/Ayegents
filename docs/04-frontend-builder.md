@@ -402,8 +402,7 @@ real types to generate from.
 ## 10. Open items for `05`/later
 
 - ~~Webhook/schedule triggers (the `triggers` table)~~ **Done** — see below.
-- True draft dry-run (execute an unsaved spec) — needs an orchestrator entry point that
-  takes a spec directly instead of loading one from `flow_versions`
+- ~~True draft dry-run (execute an unsaved spec)~~ **Done** — see below.
 - ~~Canvas-level auto-layout beyond "new node with no position yet" (§7), undo/redo,
   multi-select~~ **Done** — see below.
 - ~~Marketplace flow listings, once `marketplace.py`'s flow-listing gap closes~~ **Done** —
@@ -606,3 +605,63 @@ republishing after attaching a sub-agent to one of the flow's agents 400s with
 No application-level tests exist for `services/api` (this project verifies the API via
 Docker + curl/browser, not a pytest suite) and no frontend code touches these endpoints
 yet, so there's nothing to typecheck or run beyond the manual verification above.
+
+### True draft dry-run
+
+The last of the §1 "explicitly not in this phase" items and the last of §10's open
+items. A real gap, not just a nice-to-have: without it, trying a flow meant saving a
+version first every time, including for a typo-fix-and-retry loop on something that
+never needs to be kept.
+
+The schema needed one new nullable column; nothing else about how a run executes or is
+displayed had to change, because a dry-run is a completely ordinary `runs` row in every
+other respect — real tokens, real tool calls, real `run_steps`, shows up in the Runs list
+and this flow's own history. The only thing that's not real is where its spec came from.
+
+- **`supabase/migrations/0006_run_draft_spec.sql`** — `runs.draft_spec jsonb`, nullable.
+  Null (the existing, unchanged case) means "look up `flow_version_id`, or the latest
+  `flow_versions` row for `flow_id`" exactly as before; non-null means "this is the spec,
+  don't touch `flow_versions` at all."
+- **`services/api/app/routers/runs.py`** — `RunCreate` gained `draft_spec: FlowSpec | None`
+  (imported straight from `flows.py` — the exact same Pydantic model `POST
+  .../flows/{flow_id}/versions` validates against, so a dry-run spec gets the identical
+  "exactly one trigger node" check for free, no duplicated validation). Rejected with a
+  400 if paired with `agent_id` instead of `flow_id` — an agent has no separate "unsaved
+  spec" of its own the way a flow's canvas does, so this is flow-only. `RunListItemOut` and
+  `RunDetailOut` both gained a derived `is_draft: bool` (`draft_spec is not null`), since a
+  dry-run's `flow_id` can point at a flow with a completely different (or no) saved
+  version, and the Runs UI needed some way to say so rather than silently looking like an
+  ordinary flow run.
+- **`services/orchestrator/orchestrator_app/flow_executor.py`** — `run_flow` now branches
+  three ways instead of two: `draft_spec` present → use it directly; else
+  `flow_version_id` set → load that exact version (unchanged); else → load the latest
+  version for `flow_id` (unchanged). Everything downstream (`execute_flow`, node
+  execution, `run_steps` logging) is identical regardless of which branch supplied the
+  spec — it was already just handed a `spec: dict`, so it never needed to know or care
+  where one came from.
+- **Frontend**: `components/flows/TestRunDrawer.tsx` (new) — a "Test run" button in the
+  canvas toolbar next to Triggers/Undo/Redo/Auto-layout/Save version, opening a small
+  drawer (same JSON-input-textarea pattern the Runs page's own start-run drawer already
+  uses) that calls `specFromCanvas(nodes, edges)` — the exact function `handleSave` already
+  uses to build what gets POSTed as a saved version — and sends it as `draft_spec` on an
+  ordinary `POST .../runs` instead, then navigates to `/runs/{id}` to watch it, reusing the
+  run detail page as-is. The Runs list and Run detail page both got a small
+  `is_draft`-driven label ("test run, unsaved spec" / a gray "test run — unsaved spec"
+  badge) so a dry-run never looks indistinguishable from a real flow run in either view.
+
+Verified against the real Docker Postgres + API + orchestrator setup. Via `curl`: created a
+flow with zero saved versions, POSTed a run with `draft_spec` set directly and confirmed it
+executed successfully and produced real output (a `current_time` tool node's real
+timestamp) despite `GET .../flows/{id}/versions` returning `[]` the whole time; saved a real
+version afterward and confirmed an ordinary run (no `draft_spec`) still works unchanged and
+comes back `is_draft: false`; confirmed `draft_spec` + `agent_id` together 400s, and that a
+`draft_spec` with no trigger node 422s via the shared `FlowSpec` validator. Then end-to-end
+in the browser against the same stack: signed in, built a brand-new flow, dragged a Tool
+node onto the canvas, wired it to the trigger, picked `current_time` — all without ever
+clicking "Save version" (toolbar showed "Unsaved changes" throughout) — clicked "Test run,"
+entered input JSON, submitted, and landed on `/runs/{id}` showing `succeeded` with the real
+tool output and a "test run — unsaved spec" badge; confirmed the same run appears in the
+Runs list labeled "(test run, unsaved spec)."
+
+`tsc --noEmit`, `npm run build` (11 routes, unchanged — Test run is a drawer, not a new
+route), and `npm test` (9 tests, unaffected) all clean.

@@ -81,7 +81,10 @@ export default function RunDetailPage() {
           <h1 className="font-mono text-lg font-semibold">{run.id}</h1>
           <p className="text-sm text-gray-500">Started {new Date(run.created_at).toLocaleString()}</p>
         </div>
-        <Badge tone={statusTone(run.status)}>{run.status}</Badge>
+        <div className="flex items-center gap-2">
+          {run.is_draft && <Badge tone="gray">test run — unsaved spec</Badge>}
+          <Badge tone={statusTone(run.status)}>{run.status}</Badge>
+        </div>
       </div>
 
       {run.error && (

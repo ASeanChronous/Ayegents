@@ -622,19 +622,17 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /**
-             * Installed Agent Id
-             * Format: uuid
-             */
-            installed_agent_id: string;
+            /** Installed Agent Id */
+            installed_agent_id: string | null;
+            /** Installed Flow Id */
+            installed_flow_id: string | null;
         };
         /** ListingCreate */
         ListingCreate: {
-            /**
-             * Source Agent Id
-             * Format: uuid
-             */
-            source_agent_id: string;
+            /** Source Agent Id */
+            source_agent_id?: string | null;
+            /** Source Flow Id */
+            source_flow_id?: string | null;
             /** Name */
             name: string;
             /** Description */
@@ -667,6 +665,7 @@ export interface components {
             input: {
                 [key: string]: unknown;
             };
+            draft_spec?: components["schemas"]["FlowSpec"] | null;
         };
         /** RunDetailOut */
         RunDetailOut: {
@@ -700,6 +699,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Is Draft */
+            is_draft: boolean;
         };
         /** RunListItemOut */
         RunListItemOut: {
@@ -714,6 +715,8 @@ export interface components {
             agent_id: string | null;
             /** Flow Id */
             flow_id: string | null;
+            /** Is Draft */
+            is_draft: boolean;
             /** Total Tokens */
             total_tokens: number;
             /**
@@ -912,6 +915,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Kind */
+            kind: string;
             /** Name */
             name: string;
             /** Description */

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.db import get_pool
 from app.deps import get_current_user_id
+from app.routers.flows import FlowSpec
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/runs", tags=["runs"])
 
@@ -14,6 +15,11 @@ class RunCreate(BaseModel):
     agent_id: UUID | None = None
     flow_id: UUID | None = None
     input: dict = {}
+    # A true draft dry-run (docs/04-frontend-builder.md §10): the flow canvas's
+    # current, possibly-never-saved nodes/edges, run exactly as-is instead of
+    # whatever flow_versions currently holds for flow_id. Flow-only -- an
+    # agent has no separate "unsaved spec" of its own to dry-run the same way.
+    draft_spec: FlowSpec | None = None
 
 
 class RunOut(BaseModel):
@@ -26,6 +32,7 @@ class RunListItemOut(BaseModel):
     status: str
     agent_id: UUID | None
     flow_id: UUID | None
+    is_draft: bool
     total_tokens: int
     created_at: datetime
     finished_at: datetime | None
@@ -45,6 +52,7 @@ class RunDetailOut(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+    is_draft: bool
 
 
 class RunStepOut(BaseModel):
@@ -71,7 +79,8 @@ async def list_runs(workspace_id: UUID, user_id: UUID = Depends(get_current_user
     pool = await get_pool()
     rows = await pool.fetch(
         """
-        select id, status, agent_id, flow_id, total_tokens, created_at, finished_at
+        select id, status, agent_id, flow_id, draft_spec is not null as is_draft,
+               total_tokens, created_at, finished_at
         from runs where workspace_id = $1
         order by created_at desc
         limit 100
@@ -87,20 +96,23 @@ async def create_run(
 ):
     if (body.agent_id is None) == (body.flow_id is None):
         raise HTTPException(status_code=400, detail="exactly one of agent_id or flow_id is required")
+    if body.draft_spec is not None and body.agent_id is not None:
+        raise HTTPException(status_code=400, detail="draft_spec can only be used with flow_id, not agent_id")
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             run = await conn.fetchrow(
                 """
-                insert into runs (workspace_id, agent_id, flow_id, input, status)
-                values ($1, $2, $3, $4, 'queued')
+                insert into runs (workspace_id, agent_id, flow_id, input, draft_spec, status)
+                values ($1, $2, $3, $4, $5, 'queued')
                 returning id, status
                 """,
                 workspace_id,
                 body.agent_id,
                 body.flow_id,
                 body.input,
+                body.draft_spec.model_dump(mode="json", by_alias=True) if body.draft_spec else None,
             )
             # Hand off to the orchestrator via the Postgres-native job queue
             # (SKIP LOCKED pattern, no Redis/pg-boss — see services/orchestrator).
@@ -116,7 +128,7 @@ async def get_run(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(get_
     row = await pool.fetchrow(
         """
         select id, status, input, output, total_tokens, total_cost_usd, error,
-               started_at, finished_at, created_at
+               started_at, finished_at, created_at, draft_spec is not null as is_draft
         from runs where id = $1 and workspace_id = $2
         """,
         run_id,

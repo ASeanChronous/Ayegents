@@ -25,6 +25,7 @@ type Run = {
   status: string;
   agent_id: string | null;
   flow_id: string | null;
+  is_draft: boolean;
   total_tokens: number;
   created_at: string;
   finished_at: string | null;
@@ -99,7 +100,9 @@ export default function RunsPage() {
                 ) : (
                   <span className="text-gray-600">
                     {r.flow_id ? flowsById.get(r.flow_id)?.name ?? r.flow_id.slice(0, 8) : "—"}
-                    <span className="ml-1 text-xs text-gray-400">(flow)</span>
+                    <span className="ml-1 text-xs text-gray-400">
+                      ({r.is_draft ? "test run, unsaved spec" : "flow"})
+                    </span>
                   </span>
                 ),
             },
