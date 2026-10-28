@@ -62,6 +62,45 @@ class ListingOut(BaseModel):
     status: str
 
 
+class WorkspaceListingOut(BaseModel):
+    id: UUID
+    kind: str
+    name: str
+    description: str | None
+    category: str | None
+    status: str
+    install_count: int
+    rating_avg: float | None
+    required_tool_categories: list[str]
+
+
+# Same one-word "kind" listings.py's public browse derives (source_agent_id/
+# source_flow_id is a storage-level xor, 0001_init_schema.sql's check
+# constraint) -- duplicated here rather than imported so each router stays
+# self-contained, matching every other router in this project.
+_KIND_SQL = "case when source_agent_id is not null then 'agent' else 'flow' end as kind"
+
+
+@listings_router.get("", response_model=list[WorkspaceListingOut])
+async def list_my_listings(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    # The public GET /marketplace/listings (listings.py) only ever shows
+    # status = 'published' rows -- by design, an unpublished listing has
+    # nothing to browse (no spec, no required_tool_categories yet). This is
+    # the owner's-eye view instead: every status, so a draft listing (created
+    # but never published, or publish-time validation failed) is visible to
+    # the workspace that owns it rather than silently invisible everywhere.
+    pool = await get_pool()
+    rows = await pool.fetch(
+        f"""
+        select id, {_KIND_SQL}, name, description, category, status, install_count, rating_avg,
+               required_tool_categories
+        from listings where workspace_id = $1 order by created_at desc
+        """,
+        workspace_id,
+    )
+    return [WorkspaceListingOut(**dict(r)) for r in rows]
+
+
 @listings_router.post("", response_model=ListingOut, status_code=201)
 async def create_listing(workspace_id: UUID, body: ListingCreate, user_id: UUID = Depends(get_current_user_id)):
     pool = await get_pool()

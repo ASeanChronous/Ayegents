@@ -309,7 +309,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List My Listings */
+        get: operations["list_my_listings_workspaces__workspace_id__listings_get"];
         put?: never;
         /** Create Listing */
         post: operations["create_listing_workspaces__workspace_id__listings_post"];
@@ -895,6 +896,30 @@ export interface components {
         WorkspaceCreate: {
             /** Name */
             name: string;
+        };
+        /** WorkspaceListingOut */
+        WorkspaceListingOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Category */
+            category: string | null;
+            /** Status */
+            status: string;
+            /** Install Count */
+            install_count: number;
+            /** Rating Avg */
+            rating_avg: number | null;
+            /** Required Tool Categories */
+            required_tool_categories: string[];
         };
         /** WorkspaceOut */
         WorkspaceOut: {
@@ -1786,6 +1811,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["app__routers__listings__ListingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_my_listings_workspaces__workspace_id__listings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceListingOut"][];
                 };
             };
             /** @description Validation Error */

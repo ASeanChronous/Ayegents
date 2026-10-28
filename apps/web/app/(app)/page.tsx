@@ -3,8 +3,8 @@ export default function DashboardPage() {
     <div className="space-y-2">
       <h1 className="text-2xl font-semibold">Agent Ecosystem</h1>
       <p className="text-gray-600">
-        Functional core: agents, tools, and runs. The visual flow builder and marketplace
-        storefront come later (see <code>docs/03-frontend.md</code>).
+        Agents, tools, flows, runs, and the marketplace — build something in the Agents or
+        Flows tab, publish it, or browse what&apos;s already been shared.
       </p>
     </div>
   );
