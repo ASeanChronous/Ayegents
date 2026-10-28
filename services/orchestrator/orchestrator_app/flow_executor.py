@@ -33,6 +33,7 @@ from orchestrator_app.executor import (
     _load_current_version,
     _log_tool_step,
 )
+from orchestrator_app.notify import notify_run
 from orchestrator_app.tool_gateway import ToolDispatchError, dispatch_tool
 
 
@@ -77,6 +78,7 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
                 """,
                 run_id,
             )
+            await notify_run(conn, run_id)
             return
 
         limits = await conn.fetchrow(
@@ -91,6 +93,7 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
         await conn.execute(
             "update runs set status = 'running', started_at = now() where id = $1", run_id
         )
+        await notify_run(conn, run_id)
 
     try:
         # execute_flow acquires its own connection per node below — a flow with
@@ -115,6 +118,7 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
                 {"node_outputs": final_state["node_outputs"]},
                 total_tokens,
             )
+            await notify_run(conn, run_id)
     except Exception as exc:  # noqa: BLE001 — surfaced into the run row, not swallowed
         async with pool.acquire() as conn:
             await conn.execute(
@@ -122,6 +126,7 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
                 run_id,
                 str(exc),
             )
+            await notify_run(conn, run_id)
 
 
 async def execute_flow(

@@ -21,6 +21,7 @@ from anthropic import AsyncAnthropic
 
 from orchestrator_app.config import settings
 from orchestrator_app.model_router import resolve_model_id
+from orchestrator_app.notify import notify_run
 from orchestrator_app.tool_gateway import ToolDispatchError, dispatch_tool
 
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -42,6 +43,7 @@ async def run_single_agent(conn: asyncpg.Connection, run_id: UUID) -> None:
     await conn.execute(
         "update runs set status = 'running', started_at = now() where id = $1", run_id
     )
+    await notify_run(conn, run_id)
 
     status, output, total_tokens = await _execute_agent_loop(
         conn,
@@ -65,6 +67,7 @@ async def run_single_agent(conn: asyncpg.Connection, run_id: UUID) -> None:
         total_tokens,
         output.get("error") if status == "failed" else None,
     )
+    await notify_run(conn, run_id)
 
 
 async def run_agent_as_tool(
@@ -213,6 +216,7 @@ async def _execute_agent_loop(
                     response.usage.output_tokens,
                     latency_ms,
                 )
+                await notify_run(conn, run_id)
 
             if response.stop_reason != "tool_use":
                 final_text = "".join(
@@ -299,3 +303,4 @@ async def _log_tool_step(conn, run_id, tool_id, tool_input, output, started, sta
             status,
             error,
         )
+    await notify_run(conn, run_id)

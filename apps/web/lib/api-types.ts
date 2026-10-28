@@ -251,6 +251,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Run Events
+         * @description Server-Sent Events replacement for the run inspector's old fixed-interval
+         *     polling (docs/03-frontend.md §6), backed by the orchestrator's Postgres
+         *     NOTIFY on the 'run_events' channel (services/orchestrator/orchestrator_app/
+         *     notify.py) rather than Supabase's own hosted Realtime service -- same
+         *     postgres-native choice this project already made for run_queue instead of
+         *     pg-boss/Redis, and it works against the plain local Postgres this project
+         *     runs in dev without a separate Realtime server to stand up.
+         *
+         *     Events carry only a status string, never the full run/steps payload --
+         *     the client re-fetches through the normal GET endpoints on every event, so
+         *     this stream's only job is "something changed, go look," not re-deriving
+         *     those endpoints' serialization here too.
+         */
+        get: operations["stream_run_events_workspaces__workspace_id__runs__run_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/runs/{run_id}/steps": {
         parameters: {
             query?: never;
@@ -1717,6 +1748,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_run_events_workspaces__workspace_id__runs__run_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

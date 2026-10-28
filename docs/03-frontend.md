@@ -86,14 +86,59 @@ Styling: **Tailwind CSS**, added to `apps/web` (not present yet) — fastest pat
 forms/tables without hand-rolling CSS, and the conventional choice if `04`/`05` later want a
 component library (shadcn/ui, etc.) built on it.
 
-## 6. Run inspector: polling, not realtime (for now)
+## 6. Run inspector: realtime, not polling
 
-`/runs/[id]` polls `GET /workspaces/{id}/runs/{run_id}` via SWR's `refreshInterval` (e.g. 2s)
-while status is `queued`/`running`, stopping once it reaches a terminal state. Supabase
-Realtime (subscribing to `runs`/`run_steps` changes directly) is the better long-term answer —
-no polling, no SWR interval to tune — but it's a separate chunk of work (Realtime channel
-setup, RLS-aware subscriptions) that polling avoids needing right now. Noted here so it's a
-deliberate deferral, not a gap someone finds later and wonders about.
+**Done.** `/runs/[id]` originally polled `GET /workspaces/{id}/runs/{run_id}` via SWR's
+`refreshInterval` (2s) while status was `queued`/`running`. Replaced with a push-based update:
+the orchestrator fires a Postgres `NOTIFY` on channel `run_events` (payload: the run_id)
+immediately after every write to `runs.status` and every `run_steps` insert
+(`services/orchestrator/orchestrator_app/notify.py`, called from `executor.py` and
+`flow_executor.py` at every status/step write site), and a new API endpoint, `GET
+/workspaces/{id}/runs/{run_id}/events`, turns that into a Server-Sent Events stream the
+frontend subscribes to.
+
+Deliberately **not** Supabase's own hosted Realtime service (subscribing to `runs`/`run_steps`
+changes directly via `supabase-js`), despite that being this section's original "better
+long-term answer" framing. Two reasons: it's the same postgres-native instinct this project
+already applied to `run_queue` over pg-boss/Redis — one less managed service, and NOTIFY/LISTEN
+is already sitting right there on the same database — and, concretely, this project's local dev
+stack runs plain Postgres with a GoTrue-only auth shim (`supabase/local-dev-auth-shim.sql`), not
+hosted Supabase, so a design that depended on Supabase's actual Realtime server couldn't be
+verified end to end the way everything else in this project has been.
+
+Design, deliberately kept small:
+- `GET .../runs/{id}/events` (`services/api/app/routers/runs.py`) opens one dedicated
+  `asyncpg` connection (outside the shared pool — `LISTEN` holds a connection open for the
+  life of the subscription, which the pool's short-lived checkouts aren't meant for),
+  `LISTEN`s on `run_events`, and streams `event: update\ndata: {"status": "..."}\n\n` once
+  immediately (so a client that connects after the run already finished still gets one event,
+  not silence) and again on every notify whose payload matches this run_id, closing once
+  status is terminal. A 15s idle timeout sends an SSE comment line as a keepalive, since an
+  idle proxy/load balancer can otherwise drop a connection with no traffic on it.
+- The event payload is only a status string, never the full run/steps body — the frontend
+  re-fetches through the existing `GET .../runs/{id}` / `.../steps` endpoints on every event,
+  so the stream's only job is "something changed, go look," not re-deriving those endpoints'
+  serialization a second time.
+- `apps/web/lib/useRunEvents.ts` (new): subscribes via `fetch`'s `ReadableStream`, not the
+  browser's native `EventSource` — `EventSource` can't attach an `Authorization` header, and
+  this API has no cookie session to fall back on (every other call site attaches the Supabase
+  access token as a bearer header, `lib/api.ts`). Reconnects on any drop with a short delay
+  rather than leaving the inspector stuck on stale data; stops for good once a terminal status
+  comes through or the component unmounts.
+- `/runs/[id]/page.tsx`: `useRunEvents` calls both SWR `mutate()`s on every update. The old
+  2s `refreshInterval` is now a 20s fallback only — cheap insurance against a stream that never
+  connects or silently drops (a proxy that blocks streaming entirely, say), not the real update
+  mechanism anymore.
+
+Verified against the real Docker Postgres + API + orchestrator stack: `curl -N` against
+`.../events` while a run was still `queued` showed the live sequence `queued` → `running` →
+`running` (a `run_steps` insert mid-flow) → `succeeded` arrive with no polling at all, each
+event pushed the instant the corresponding row committed. Then in a real browser: navigated to
+a run's inspector *before* the orchestrator had claimed it (confirmed `Loading…`/`queued`), and
+without any reload or re-navigation watched it flip to `succeeded` with the output and step
+timeline populated — confirmed via the network panel that this came from the single `/events`
+connection firing its `update` event (which triggered exactly one re-fetch of the run and its
+steps), not the 20s fallback poll, which hadn't elapsed yet.
 
 The run inspector also needs `GET /workspaces/{id}/runs/{run_id}/steps` to list `run_steps`
 — **done**: added alongside `GET /workspaces/{id}` (§7), both tested end to end against a
@@ -180,9 +225,9 @@ the orchestrator only ever populates `latency_ms`, never those two columns.
 
 - Visual flow builder: node/edge canvas (React Flow), compiling to the `flow_versions.spec`
   shape `flow_executor.py` already consumes — the backend is ready for this, no orchestrator
-  changes needed, purely a frontend + flow-CRUD-UI project. **Scoped**: see
+  changes needed, purely a frontend + flow-CRUD-UI project. **Scoped and done**: see
   `04-frontend-builder.md`.
 - Marketplace storefront: browse/detail/install-with-consent UI over the `marketplace.py`
-  endpoints already built and tested.
-- Realtime run updates (§6), once polling's rough edges (interval tuning, wasted requests on
-  long-running flows) are actually felt rather than anticipated.
+  endpoints already built and tested. **Done**: see `05-frontend-marketplace.md`.
+
+All three items originally listed here (including realtime run updates, §6) are now done.

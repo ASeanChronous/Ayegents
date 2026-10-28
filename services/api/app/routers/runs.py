@@ -1,14 +1,24 @@
+import asyncio
+import json
 from datetime import datetime
 from uuid import UUID
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.config import settings
 from app.db import get_pool
 from app.deps import get_current_user_id
 from app.routers.flows import FlowSpec
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/runs", tags=["runs"])
+
+# Mirrors the frontend's own TERMINAL_STATUSES (apps/web/app/(app)/runs/[id]/page.tsx)
+# -- once a run reaches one of these there's nothing further to notify about,
+# so the SSE stream below closes instead of idling forever.
+_TERMINAL_STATUSES = {"succeeded", "failed", "budget_exceeded"}
 
 
 class RunCreate(BaseModel):
@@ -137,6 +147,59 @@ async def get_run(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(get_
     if row is None:
         raise HTTPException(status_code=404, detail="run not found")
     return RunDetailOut(**dict(row))
+
+
+@router.get("/{run_id}/events")
+async def stream_run_events(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    """Server-Sent Events replacement for the run inspector's old fixed-interval
+    polling (docs/03-frontend.md §6), backed by the orchestrator's Postgres
+    NOTIFY on the 'run_events' channel (services/orchestrator/orchestrator_app/
+    notify.py) rather than Supabase's own hosted Realtime service -- same
+    postgres-native choice this project already made for run_queue instead of
+    pg-boss/Redis, and it works against the plain local Postgres this project
+    runs in dev without a separate Realtime server to stand up.
+
+    Events carry only a status string, never the full run/steps payload --
+    the client re-fetches through the normal GET endpoints on every event, so
+    this stream's only job is "something changed, go look," not re-deriving
+    those endpoints' serialization here too.
+    """
+    pool = await get_pool()
+    run = await pool.fetchrow("select status from runs where id = $1 and workspace_id = $2", run_id, workspace_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    async def event_stream():
+        # A dedicated connection outside the pool -- LISTEN holds the
+        # connection open for as long as this subscription lives, which the
+        # pool (shared, short-lived checkouts) isn't meant for.
+        conn = await asyncpg.connect(settings.database_url)
+        queue: asyncio.Queue[None] = asyncio.Queue()
+
+        def _on_notify(_connection, _pid, _channel, payload: str) -> None:
+            if payload == str(run_id):
+                queue.put_nowait(None)
+
+        await conn.add_listener("run_events", _on_notify)
+        try:
+            status = await conn.fetchval("select status from runs where id = $1", run_id)
+            yield f"event: update\ndata: {json.dumps({'status': status})}\n\n"
+            while status not in _TERMINAL_STATUSES:
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    # Idle proxies/load balancers can drop a connection with
+                    # no traffic on it for too long -- this comment line is
+                    # ignored by every SSE reader but keeps bytes flowing.
+                    yield ": keepalive\n\n"
+                    continue
+                status = await conn.fetchval("select status from runs where id = $1", run_id)
+                yield f"event: update\ndata: {json.dumps({'status': status})}\n\n"
+        finally:
+            await conn.remove_listener("run_events", _on_notify)
+            await conn.close()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.get("/{run_id}/steps", response_model=list[RunStepOut])

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import useSWR from "swr";
 
 import { api, unwrap } from "@/lib/api";
+import { useRunEvents } from "@/lib/useRunEvents";
 import { useWorkspace } from "@/lib/useWorkspace";
 import { Badge } from "@/components/Badge";
 
@@ -41,7 +42,7 @@ export default function RunDetailPage() {
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id;
 
-  const { data: run } = useSWR(
+  const { data: run, mutate: mutateRun } = useSWR(
     workspaceId ? `/workspaces/${workspaceId}/runs/${runId}` : null,
     () =>
       unwrap(
@@ -50,13 +51,16 @@ export default function RunDetailPage() {
         })
       ),
     {
-      // Poll while the run is in flight; stop once it reaches a terminal
-      // state (docs/03-frontend.md §6 -- Realtime is the better long-term
-      // answer, but polling avoids needing that setup right now).
-      refreshInterval: (latest) => (latest && TERMINAL_STATUSES.has(latest.status) ? 0 : 2000),
+      // The SSE subscription below (useRunEvents) is the real update
+      // mechanism now (docs/03-frontend.md §6); this interval is just a
+      // slow safety net in case that stream never connects or silently
+      // drops (a proxy that blocks streaming entirely, say) -- 20s is cheap
+      // enough to not matter and nowhere near the old 2s polling this
+      // replaced.
+      refreshInterval: (latest) => (latest && TERMINAL_STATUSES.has(latest.status) ? 0 : 20000),
     }
   );
-  const { data: steps } = useSWR(
+  const { data: steps, mutate: mutateSteps } = useSWR(
     workspaceId ? `/workspaces/${workspaceId}/runs/${runId}/steps` : null,
     () =>
       unwrap(
@@ -64,8 +68,13 @@ export default function RunDetailPage() {
           params: { path: { workspace_id: workspaceId!, run_id: runId } },
         })
       ),
-    { refreshInterval: run && !TERMINAL_STATUSES.has(run.status) ? 2000 : 0 }
+    { refreshInterval: run && !TERMINAL_STATUSES.has(run.status) ? 20000 : 0 }
   );
+
+  useRunEvents(workspaceId, runId, () => {
+    mutateRun();
+    mutateSteps();
+  });
 
   if (!workspaceId) {
     return <p className="text-sm text-gray-500">Pick or create a workspace first.</p>;
