@@ -44,14 +44,17 @@ function isXYPosition(value: unknown): value is XYPosition {
   );
 }
 
-/** Simple left-to-right layout by BFS depth from the trigger node, for any
- * node a loaded spec doesn't carry a `ui_position` for yet -- a spec
- * written by hand, by a test fixture, or by an older version of this app
- * from before `ui_position` existed (docs/04-frontend-builder.md §7). Pure
- * fallback, not meant to be a good layout: it only has to put every node
- * somewhere sane, not somewhere final -- dragging a node on the canvas and
+/** Simple left-to-right layout by BFS depth from the trigger node. Two
+ * callers (§10's "auto-layout beyond new node with no position yet"):
+ * `canvasFromSpec` below, as a per-node fallback for any node a loaded spec
+ * doesn't carry a `ui_position` for yet -- a spec written by hand, by a test
+ * fixture, or by an older version of this app from before `ui_position`
+ * existed (docs/04-frontend-builder.md §7); and the canvas page's explicit
+ * "Auto-layout" toolbar action, which re-lays-out every node at once on
+ * demand. Not meant to be a good layout, either way: it only has to put
+ * every node somewhere sane, not somewhere final -- dragging a node and
  * saving overwrites it with a real position from then on. */
-function autoLayoutPositions(spec: FlowSpec): Map<string, XYPosition> {
+export function autoLayoutPositions(spec: FlowSpec): Map<string, XYPosition> {
   const outgoing = new Map<string, string[]>();
   for (const edge of spec.edges) {
     const targets = outgoing.get(edge.from) ?? [];

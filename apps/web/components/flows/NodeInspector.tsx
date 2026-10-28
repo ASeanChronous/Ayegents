@@ -1,8 +1,9 @@
 "use client";
 
 /** The right-hand inspector panel (docs/04-frontend-builder.md §4/§5, step 5 of the build
- * order §9). Switches on whatever's selected: a node gets that type's form, an edge gets
- * the three-control condition editor, nothing selected gets a placeholder. */
+ * order §9). Switches on whatever's selected: a single node gets that type's form, a single
+ * edge gets the three-control condition editor, more than one of either (React Flow's own
+ * multi-select, §10) gets a bulk-delete panel, nothing selected gets a placeholder. */
 import { useEffect, useState } from "react";
 
 import type { FlowCanvasEdge, FlowCanvasNode, FlowNodeConfig } from "@/lib/flowSpec";
@@ -31,8 +32,8 @@ function inputMapSource(config: FlowNodeConfig): string {
 }
 
 export function NodeInspector({
-  selectedNode,
-  selectedEdge,
+  selectedNodes,
+  selectedEdges,
   nodes,
   edges,
   agents,
@@ -41,9 +42,10 @@ export function NodeInspector({
   onDeleteNode,
   onUpdateEdgeCondition,
   onDeleteEdge,
+  onDeleteSelected,
 }: {
-  selectedNode: FlowCanvasNode | null;
-  selectedEdge: FlowCanvasEdge | null;
+  selectedNodes: FlowCanvasNode[];
+  selectedEdges: FlowCanvasEdge[];
   nodes: FlowCanvasNode[];
   edges: FlowCanvasEdge[];
   agents: Agent[];
@@ -52,12 +54,21 @@ export function NodeInspector({
   onDeleteNode: (id: string) => void;
   onUpdateEdgeCondition: (id: string, condition: string | null) => void;
   onDeleteEdge: (id: string) => void;
+  onDeleteSelected: (nodeIds: string[], edgeIds: string[]) => void;
 }) {
-  if (selectedNode) {
+  const total = selectedNodes.length + selectedEdges.length;
+
+  if (total > 1) {
+    return (
+      <MultiSelectPanel selectedNodes={selectedNodes} selectedEdges={selectedEdges} onDeleteSelected={onDeleteSelected} />
+    );
+  }
+  if (selectedNodes.length === 1) {
+    const node = selectedNodes[0];
     return (
       <NodePanel
-        key={selectedNode.id}
-        node={selectedNode}
+        key={node.id}
+        node={node}
         nodes={nodes}
         edges={edges}
         agents={agents}
@@ -67,11 +78,12 @@ export function NodeInspector({
       />
     );
   }
-  if (selectedEdge) {
+  if (selectedEdges.length === 1) {
+    const edge = selectedEdges[0];
     return (
       <EdgePanel
-        key={selectedEdge.id}
-        edge={selectedEdge}
+        key={edge.id}
+        edge={edge}
         nodes={nodes}
         onUpdateEdgeCondition={onUpdateEdgeCondition}
         onDeleteEdge={onDeleteEdge}
@@ -79,6 +91,40 @@ export function NodeInspector({
     );
   }
   return <p className="mt-2 text-sm text-gray-400">Select a node or edge to edit it here.</p>;
+}
+
+function MultiSelectPanel({
+  selectedNodes,
+  selectedEdges,
+  onDeleteSelected,
+}: {
+  selectedNodes: FlowCanvasNode[];
+  selectedEdges: FlowCanvasEdge[];
+  onDeleteSelected: (nodeIds: string[], edgeIds: string[]) => void;
+}) {
+  // Same rule as the single-node panel (no Delete button for the trigger) --
+  // applied across the whole selection instead of just one node.
+  const deletableNodes = selectedNodes.filter((n) => n.type !== "trigger");
+  const skippedTrigger = selectedNodes.length !== deletableNodes.length;
+  const count = deletableNodes.length + selectedEdges.length;
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold text-gray-900">
+        {selectedNodes.length} node{selectedNodes.length === 1 ? "" : "s"}, {selectedEdges.length} edge
+        {selectedEdges.length === 1 ? "" : "s"} selected
+      </h3>
+      <p className="text-sm text-gray-500">Multi-select with Shift-drag or Cmd/Ctrl-click.</p>
+      {skippedTrigger && <p className="text-xs text-gray-400">The trigger node can&apos;t be deleted.</p>}
+      <button
+        onClick={() => onDeleteSelected(deletableNodes.map((n) => n.id), selectedEdges.map((e) => e.id))}
+        disabled={count === 0}
+        className="w-full rounded-md border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        Delete {count} selected
+      </button>
+    </div>
+  );
 }
 
 function PanelShell({

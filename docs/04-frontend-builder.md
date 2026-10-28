@@ -405,6 +405,62 @@ real types to generate from.
   a scheduler) before there's anything for the canvas's trigger node to configure
 - True draft dry-run (execute an unsaved spec) — needs an orchestrator entry point that
   takes a spec directly instead of loading one from `flow_versions`
-- Canvas-level auto-layout beyond "new node with no position yet" (§7), undo/redo,
-  multi-select
+- ~~Canvas-level auto-layout beyond "new node with no position yet" (§7), undo/redo,
+  multi-select~~ **Done** — see below.
+- Marketplace flow listings, once `marketplace.py`'s flow-listing gap closes (deliberate
+  scope cut, not a bug — see that file's own docstring)
+
+### Canvas UX polish (undo/redo, multi-select, auto-layout)
+
+Pure frontend, no backend or spec-shape changes — all three build on state the canvas
+already owned (`nodes`/`edges` in `app/(app)/flows/[id]/page.tsx`).
+
+- **Auto-layout.** `autoLayoutPositions` (`lib/flowSpec.ts`) was already doing BFS-depth
+  layout as `canvasFromSpec`'s per-node fallback for a loaded spec with no `ui_position`
+  (§7); exported it and added a toolbar button that re-lays-out every node on demand via
+  the same function, by round-tripping the current canvas through `specFromCanvas` first.
+- **Undo/redo.** A page-level `{nodes, edges}` snapshot stack, pushed just *before* each
+  committed edit — add/delete, a finished drag (not every intermediate drag frame, which
+  would make one drag take dozens of undo steps), a new connection, a data/condition change
+  — via a `pushHistory()` call threaded into every existing mutating handler. Toolbar
+  buttons plus Cmd/Ctrl+Z / Cmd/Ctrl+Shift+Z, guarded against an input/textarea/select
+  having focus so those keep their own native undo instead of the canvas hijacking it.
+  Switching flow versions clears both stacks (undoing past a version switch would
+  resurrect a version the user just navigated away from).
+  **Known limitation, not fixed:** `onUpdateNodeData` — called on every keystroke in the
+  tool node's JSON config textarea and on every agent/tool select change — pushes a
+  history entry every time, same granularity the existing `dirty` flag already used. Undo
+  works correctly, just needs one press per keystroke to fully revert one text edit;
+  coalescing that into one history entry per pause would need a debounce this scope didn't
+  ask for.
+- **Multi-select.** React Flow's own box-select (Shift-drag) and Cmd/Ctrl-click were
+  already enabled by default — nothing to turn on. What was missing: the inspector only
+  ever looked at `selNodes[0]`/`selEdges[0]`, silently ignoring the rest of a multi-selection.
+  Changed `selectedNodeId`/`selectedEdgeId` to arrays throughout, and added a
+  `MultiSelectPanel` (`NodeInspector.tsx`) for when more than one element is selected: shows
+  the count and a single "Delete N selected" bulk action. The trigger is excluded from a
+  bulk delete the same way it's excluded from the single-node panel's Delete button (no
+  button there) — the panel shows "The trigger node can't be deleted" rather than silently
+  dropping it from the count with no explanation.
+
+  Verified in a real browser (same Docker Postgres + API setup, no orchestrator needed —
+  pure frontend). Undo/redo: added a node, undid it (node count back to the pre-add state),
+  redid it (back), confirmed both the toolbar buttons and the Cmd+Z / Cmd+Shift+Z shortcuts
+  work; confirmed Cmd+Z while the JSON config textarea had focus did *not* touch the canvas
+  (node count unchanged); confirmed undo also reverts an Auto-layout pass, not just
+  add/delete. Auto-layout: clicked it, confirmed node positions changed to depth-based
+  columns. Multi-select: React Flow tracks `selectionKeyCode`/`multiSelectionKeyCode` via
+  its own `window` keydown/keyup listener, not the click event's own modifier flags — so
+  driving it from here needed a real `KeyboardEvent('keydown', {key: 'Meta'})` dispatched on
+  `window` around the click, not just a modifier-flag on the click itself (confirmed first
+  that a plain modifier-flag click only *replaced* the selection, never added to it, which
+  is what a real user would see too if the browser never actually saw a held key — not an
+  app bug, a limitation of scripting a "held key + click" gesture). With that, Cmd-clicking
+  a second node showed "2 nodes, 0 edges selected" and a "Delete 2 selected" button in the
+  inspector; clicking it removed both in one history step, and Undo brought both back
+  together. Selecting the trigger plus one other node and bulk-deleting showed "The trigger
+  node can't be deleted" and correctly removed only the other node. Saved the result and
+  confirmed in Postgres the persisted spec matched exactly what survived on the canvas.
+  `tsc --noEmit`, `npm run build` (11 routes, unchanged), and `npm test` (9 tests,
+  unaffected) all clean.
 - Marketplace flow listings, once `marketplace.py`'s flow-listing gap closes

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import useSWR from "swr";
@@ -17,6 +17,7 @@ import {
 import { api, unwrap, ApiError } from "@/lib/api";
 import { useWorkspace } from "@/lib/useWorkspace";
 import {
+  autoLayoutPositions,
   canvasFromSpec,
   createCanvasNode,
   specFromCanvas,
@@ -78,8 +79,12 @@ export default function FlowCanvasPage() {
   // revalidation) without snapping back.
   const [nodes, setNodes] = useState<FlowCanvasNode[] | null>(null);
   const [edges, setEdges] = useState<FlowCanvasEdge[] | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  // Arrays, not single ids -- React Flow's own box-select (Shift-drag) and
+  // cmd/ctrl-click can select more than one node and/or edge at once (§10's
+  // "multi-select"), and the inspector needs to know the whole set to offer
+  // a bulk delete instead of silently acting on whichever selected first.
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
 
   // Which version the picker (§9 step 7) currently has loaded -- null for a
   // brand-new flow with no versions yet. Saving always creates version
@@ -96,13 +101,98 @@ export default function FlowCanvasPage() {
   // the reload a successful save triggers below.
   const [dirty, setDirty] = useState(false);
 
+  // Undo/redo (§10): a stack of {nodes, edges} snapshots taken just *before*
+  // each committed edit -- add/delete, a finished drag, a new connection, a
+  // data/condition change -- not on every intermediate drag frame, which
+  // would make one drag take dozens of undo steps. nodesRef/edgesRef exist
+  // only so pushHistory (called from change handlers that are useCallback'd
+  // with empty deps, to avoid recreating them on every keystroke) can read
+  // the current canvas state without needing those deps -- handleUndo/Redo
+  // below are plain functions, recreated every render, and read `nodes`/
+  // `edges` directly instead.
+  const nodesRef = useRef<FlowCanvasNode[] | null>(null);
+  const edgesRef = useRef<FlowCanvasEdge[] | null>(null);
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+
+  type CanvasSnapshot = { nodes: FlowCanvasNode[]; edges: FlowCanvasEdge[] };
+  const HISTORY_LIMIT = 50;
+  const [undoStack, setUndoStack] = useState<CanvasSnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<CanvasSnapshot[]>([]);
+
+  const pushHistory = useCallback(() => {
+    if (nodesRef.current === null || edgesRef.current === null) return;
+    setUndoStack((stack) =>
+      [...stack, { nodes: nodesRef.current!, edges: edgesRef.current! }].slice(-HISTORY_LIMIT)
+    );
+    setRedoStack([]);
+  }, []);
+
+  function handleUndo() {
+    if (undoStack.length === 0 || nodes === null || edges === null) return;
+    const previous = undoStack[undoStack.length - 1];
+    setRedoStack((stack) => [...stack, { nodes, edges }].slice(-HISTORY_LIMIT));
+    setUndoStack((stack) => stack.slice(0, -1));
+    setNodes(previous.nodes);
+    setEdges(previous.edges);
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([]);
+    setDirty(true);
+  }
+
+  function handleRedo() {
+    if (redoStack.length === 0 || nodes === null || edges === null) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack((stack) => [...stack, { nodes, edges }].slice(-HISTORY_LIMIT));
+    setRedoStack((stack) => stack.slice(0, -1));
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([]);
+    setDirty(true);
+  }
+
+  // Keyboard shortcuts for the two buttons below. Guarded against an input
+  // field having focus (the inspector's text/JSON fields, the version
+  // picker) so Cmd/Ctrl-Z there does that field's own native undo instead
+  // of hijacking it for the canvas.
+  useEffect(() => {
+    function isTextEntryFocused(): boolean {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (el as HTMLElement).isContentEditable;
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || isTextEntryFocused()) return;
+      e.preventDefault();
+      if (e.shiftKey) {
+        handleRedo();
+      } else {
+        handleUndo();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [undoStack, redoStack, nodes, edges]);
+
   const loadSpec = useCallback((spec: FlowSpec) => {
     const { nodes: seededNodes, edges: seededEdges } = canvasFromSpec(spec);
     setNodes(seededNodes);
     setEdges(seededEdges);
-    setSelectedNodeId(null);
-    setSelectedEdgeId(null);
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([]);
     setDirty(false);
+    // Switching versions (or the initial load) replaces the canvas wholesale
+    // -- undoing past that point would resurrect a version the user just
+    // navigated away from, which reads as broken rather than "undo."
+    setUndoStack([]);
+    setRedoStack([]);
   }, []);
 
   // versions is ordered newest-first (services/api/app/routers/flows.py), so
@@ -124,47 +214,107 @@ export default function FlowCanvasPage() {
     loadSpec(picked.spec);
   }
 
-  const onNodesChange: OnNodesChange<FlowCanvasNode> = useCallback((changes) => {
-    setNodes((nds) => applyNodeChanges(changes, nds ?? []));
-    if (changes.some((c) => c.type === "remove" || (c.type === "position" && c.dragging === false))) {
+  const onNodesChange: OnNodesChange<FlowCanvasNode> = useCallback(
+    (changes) => {
+      const isCommit = changes.some((c) => c.type === "remove" || (c.type === "position" && c.dragging === false));
+      if (isCommit) pushHistory();
+      setNodes((nds) => applyNodeChanges(changes, nds ?? []));
+      if (isCommit) setDirty(true);
+    },
+    [pushHistory]
+  );
+  const onEdgesChange: OnEdgesChange<FlowCanvasEdge> = useCallback(
+    (changes) => {
+      const isCommit = changes.some((c) => c.type === "remove");
+      if (isCommit) pushHistory();
+      setEdges((eds) => applyEdgeChanges(changes, eds ?? []));
+      if (isCommit) setDirty(true);
+    },
+    [pushHistory]
+  );
+  const onConnect: OnConnect = useCallback(
+    (connection) => {
+      pushHistory();
+      setEdges((eds) => addEdge({ ...connection, data: { condition: null } }, eds ?? []));
       setDirty(true);
-    }
-  }, []);
-  const onEdgesChange: OnEdgesChange<FlowCanvasEdge> = useCallback((changes) => {
-    setEdges((eds) => applyEdgeChanges(changes, eds ?? []));
-    if (changes.some((c) => c.type === "remove")) setDirty(true);
-  }, []);
-  const onConnect: OnConnect = useCallback((connection) => {
-    setEdges((eds) => addEdge({ ...connection, data: { condition: null } }, eds ?? []));
-    setDirty(true);
-  }, []);
+    },
+    [pushHistory]
+  );
   const onSelectionChange: OnSelectionChangeFunc = useCallback(({ nodes: selNodes, edges: selEdges }) => {
-    setSelectedNodeId(selNodes[0]?.id ?? null);
-    setSelectedEdgeId(selEdges[0]?.id ?? null);
+    setSelectedNodeIds(selNodes.map((n) => n.id));
+    setSelectedEdgeIds(selEdges.map((e) => e.id));
   }, []);
-  const onAddNode = useCallback((type: FlowNodeType, position: { x: number; y: number }) => {
-    setNodes((nds) => [...(nds ?? []), createCanvasNode(type, position)]);
+  const onAddNode = useCallback(
+    (type: FlowNodeType, position: { x: number; y: number }) => {
+      pushHistory();
+      setNodes((nds) => [...(nds ?? []), createCanvasNode(type, position)]);
+      setDirty(true);
+    },
+    [pushHistory]
+  );
+  const onUpdateNodeData = useCallback(
+    (id: string, data: FlowCanvasNode["data"]) => {
+      pushHistory();
+      setNodes((nds) => (nds ?? []).map((n) => (n.id === id ? { ...n, data } : n)));
+      setDirty(true);
+    },
+    [pushHistory]
+  );
+  const onDeleteNode = useCallback(
+    (id: string) => {
+      pushHistory();
+      setNodes((nds) => (nds ?? []).filter((n) => n.id !== id));
+      setEdges((eds) => (eds ?? []).filter((e) => e.source !== id && e.target !== id));
+      setSelectedNodeIds([]);
+      setDirty(true);
+    },
+    [pushHistory]
+  );
+  const onUpdateEdgeCondition = useCallback(
+    (id: string, condition: string | null) => {
+      pushHistory();
+      setEdges((eds) => (eds ?? []).map((e) => (e.id === id ? { ...e, data: { condition } } : e)));
+      setDirty(true);
+    },
+    [pushHistory]
+  );
+  const onDeleteEdge = useCallback(
+    (id: string) => {
+      pushHistory();
+      setEdges((eds) => (eds ?? []).filter((e) => e.id !== id));
+      setSelectedEdgeIds([]);
+      setDirty(true);
+    },
+    [pushHistory]
+  );
+  // Bulk delete from the inspector's multi-select panel (§10) -- `nodeIds`
+  // never includes the trigger (NodeInspector filters it out before calling
+  // this), but an edge touching a node being removed here still needs to go
+  // too, same as the single-node onDeleteNode above.
+  const onDeleteSelected = useCallback(
+    (nodeIds: string[], edgeIds: string[]) => {
+      if (nodeIds.length === 0 && edgeIds.length === 0) return;
+      pushHistory();
+      const nodeIdSet = new Set(nodeIds);
+      const edgeIdSet = new Set(edgeIds);
+      setNodes((nds) => (nds ?? []).filter((n) => !nodeIdSet.has(n.id)));
+      setEdges((eds) =>
+        (eds ?? []).filter((e) => !edgeIdSet.has(e.id) && !nodeIdSet.has(e.source) && !nodeIdSet.has(e.target))
+      );
+      setSelectedNodeIds([]);
+      setSelectedEdgeIds([]);
+      setDirty(true);
+    },
+    [pushHistory]
+  );
+  const handleAutoLayout = useCallback(() => {
+    if (nodes === null || edges === null) return;
+    pushHistory();
+    const spec = specFromCanvas(nodes, edges);
+    const positions = autoLayoutPositions(spec);
+    setNodes((nds) => (nds ?? []).map((n) => ({ ...n, position: positions.get(n.id) ?? n.position })));
     setDirty(true);
-  }, []);
-  const onUpdateNodeData = useCallback((id: string, data: FlowCanvasNode["data"]) => {
-    setNodes((nds) => (nds ?? []).map((n) => (n.id === id ? { ...n, data } : n)));
-    setDirty(true);
-  }, []);
-  const onDeleteNode = useCallback((id: string) => {
-    setNodes((nds) => (nds ?? []).filter((n) => n.id !== id));
-    setEdges((eds) => (eds ?? []).filter((e) => e.source !== id && e.target !== id));
-    setSelectedNodeId(null);
-    setDirty(true);
-  }, []);
-  const onUpdateEdgeCondition = useCallback((id: string, condition: string | null) => {
-    setEdges((eds) => (eds ?? []).map((e) => (e.id === id ? { ...e, data: { condition } } : e)));
-    setDirty(true);
-  }, []);
-  const onDeleteEdge = useCallback((id: string) => {
-    setEdges((eds) => (eds ?? []).filter((e) => e.id !== id));
-    setSelectedEdgeId(null);
-    setDirty(true);
-  }, []);
+  }, [nodes, edges, pushHistory]);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -206,8 +356,8 @@ export default function FlowCanvasPage() {
     return <p className="p-6 text-sm text-gray-500">Pick or create a workspace first.</p>;
   }
 
-  const selectedNode = nodes?.find((n) => n.id === selectedNodeId) ?? null;
-  const selectedEdge = edges?.find((e) => e.id === selectedEdgeId) ?? null;
+  const selectedNodes = (nodes ?? []).filter((n) => selectedNodeIds.includes(n.id));
+  const selectedEdges = (edges ?? []).filter((e) => selectedEdgeIds.includes(e.id));
 
   return (
     <div className="flex h-full flex-col">
@@ -233,6 +383,32 @@ export default function FlowCanvasPage() {
               ))}
             </select>
           )}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleUndo}
+              disabled={undoStack.length === 0}
+              title="Undo (Cmd/Ctrl+Z)"
+              className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Undo
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={redoStack.length === 0}
+              title="Redo (Cmd/Ctrl+Shift+Z)"
+              className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Redo
+            </button>
+            <button
+              onClick={handleAutoLayout}
+              disabled={!nodes || !edges}
+              title="Re-lay-out every node by BFS depth from the trigger"
+              className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Auto-layout
+            </button>
+          </div>
           <p className="text-xs text-gray-400">
             {saveError ? (
               <span className="text-red-600">{saveError}</span>
@@ -243,8 +419,6 @@ export default function FlowCanvasPage() {
             ) : (
               "All changes saved"
             )}
-            {" — "}
-            Start a run arrives in the next step (docs/04-frontend-builder.md §9).
           </p>
           <button
             onClick={handleSave}
@@ -279,8 +453,8 @@ export default function FlowCanvasPage() {
           <div className="mt-2">
             <FlowLookupProvider value={lookup}>
               <NodeInspector
-                selectedNode={selectedNode}
-                selectedEdge={selectedEdge}
+                selectedNodes={selectedNodes}
+                selectedEdges={selectedEdges}
                 nodes={nodes ?? []}
                 edges={edges ?? []}
                 agents={agents ?? []}
@@ -289,6 +463,7 @@ export default function FlowCanvasPage() {
                 onDeleteNode={onDeleteNode}
                 onUpdateEdgeCondition={onUpdateEdgeCondition}
                 onDeleteEdge={onDeleteEdge}
+                onDeleteSelected={onDeleteSelected}
               />
             </FlowLookupProvider>
           </div>
