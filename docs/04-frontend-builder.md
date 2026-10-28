@@ -231,9 +231,27 @@ real types to generate from.
    plain 404, not a crash. Verified in a real browser: created a workspace, created a flow,
    confirmed the empty state, the `draft` status badge, and the row directly in Postgres
    (name/workspace/`created_by` all correct). `AppShell`'s nav gained a Flows link.
-4. `<FlowCanvas>` + `<NodePalette>` + the five node components rendering read-only (load a
-   spec, see it laid out, no editing yet) — proves `canvasFromSpec` + the library setup
-   before adding interaction
+4. **Done.** `app/(app)/flows/[id]/page.tsx` — the canvas page (§6's full-bleed route;
+   `AppShell` now matches `/flows/[id]` by path and drops the standard centered/padded
+   `<main>` only for it, every other route unchanged). Loads the flow's latest version via
+   `canvasFromSpec` (a brand-new flow with no versions gets a single-trigger spec, per §1),
+   renders it through `<FlowCanvas>` (wraps `@xyflow/react`'s `<ReactFlow>` +
+   `Background`/`Controls`/`MiniMap`, `nodesDraggable={false}`/`nodesConnectable={false}` —
+   genuinely read-only, not just undecorated) and the five node components from §4
+   (`components/flows/nodeTypes.tsx`), each resolving its `agent_id`/`tool_id` to a name via
+   a small `FlowLookupContext` fed from the same `GET .../agents`/`GET .../tools` calls
+   other pages already make, rather than carrying agent/tool lists through every node's
+   `data`. `<NodePalette>` renders the static four-entry list from §7 (drag-to-add itself is
+   step 5). Verified in a real browser: built a 6-node version by hand via `curl` (trigger →
+   agent → conditional → two tool nodes with no saved `ui_position`, one with `input_map`
+   set, fanning into a merge) specifically to exercise all five node types, both fan-out and
+   conditional edges, the resolved-name lookup (confirmed "Time Teller"/`current_time` shown,
+   not raw ids), and the BFS auto-layout spacing fan-out siblings apart — all rendered
+   correctly, including the `input_map` subtitle correctly differing between the two tool
+   nodes. Also confirmed the blank-flow case (trigger only, `fitView` centers it) and that
+   dragging a node pans the canvas instead of moving it, proving `nodesDraggable={false}`
+   actually took effect rather than just being set. `tsc --noEmit`, `npm run build` (11
+   routes), and `npm test` all clean.
 5. `<NodeInspector>` per node type (§4), node add/delete, edge drag-to-connect
 6. Edge condition editor (§5), Save version wired to `POST .../versions` via
    `specFromCanvas`

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -9,9 +9,17 @@ import { useSession } from "@/lib/useSession";
 import { WorkspaceProvider } from "@/lib/useWorkspace";
 import WorkspaceSwitcher from "./WorkspaceSwitcher";
 
+// The canvas (/flows/[id]) is the one page that needs real screen space --
+// every other page gets the standard centered, padded column
+// (docs/04-frontend-builder.md §6). Matched by path rather than a prop so
+// every other page stays untouched.
+const FULL_BLEED_PATTERN = /^\/flows\/[^/]+$/;
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const { session, loading } = useSession();
   const router = useRouter();
+  const pathname = usePathname();
+  const fullBleed = FULL_BLEED_PATTERN.test(pathname);
 
   useEffect(() => {
     if (!loading && !session) {
@@ -33,8 +41,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     // WorkspaceProvider only mounts once a session exists -- its /workspaces
     // fetch would otherwise fire before there's a token to send.
     <WorkspaceProvider>
-      <div className="min-h-screen">
-        <nav className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
+      <div className="flex h-screen flex-col">
+        <nav className="flex flex-shrink-0 items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
           <div className="flex items-center gap-6">
             <Link href="/" className="font-semibold">
               Agent Ecosystem
@@ -71,7 +79,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         </nav>
-        <main className="mx-auto max-w-5xl p-6">{children}</main>
+        <main className={fullBleed ? "min-h-0 flex-1" : "mx-auto w-full max-w-5xl flex-1 overflow-y-auto p-6"}>
+          {children}
+        </main>
       </div>
     </WorkspaceProvider>
   );
