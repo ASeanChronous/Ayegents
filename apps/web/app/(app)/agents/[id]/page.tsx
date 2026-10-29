@@ -13,6 +13,7 @@ import { Badge } from "@/components/Badge";
 const MODEL_TIERS = ["haiku", "sonnet", "opus"] as const;
 
 type Tool = { id: string; key: string; name: string; kind: string };
+type AgentSummary = { id: string; name: string };
 type AgentVersion = {
   id: string;
   version: number;
@@ -21,7 +22,7 @@ type AgentVersion = {
   max_steps: number | null;
   max_tokens: number | null;
   created_at: string;
-  tools: { tool_id: string; key: string; name: string; config: Record<string, unknown> }[];
+  tools: { tool_id: string; key: string; name: string; kind: string; config: Record<string, unknown> }[];
   sub_agent_ids: string[];
 };
 
@@ -51,6 +52,10 @@ export default function AgentDetailPage() {
   const { data: tools } = useSWR(
     workspaceId ? `/workspaces/${workspaceId}/tools` : null,
     () => unwrap(api.GET("/workspaces/{workspace_id}/tools", { params: { path: { workspace_id: workspaceId! } } }))
+  );
+  const { data: allAgents } = useSWR(
+    workspaceId ? `/workspaces/${workspaceId}/agents` : null,
+    () => unwrap(api.GET("/workspaces/{workspace_id}/agents", { params: { path: { workspace_id: workspaceId! } } }))
   );
 
   const [publishOpen, setPublishOpen] = useState(false);
@@ -91,7 +96,9 @@ export default function AgentDetailPage() {
                 header: "Tools",
                 render: (v) =>
                   v.tools.length > 0 ? (
-                    <span className="text-xs text-gray-600">{v.tools.map((t) => t.key).join(", ")}</span>
+                    <span className="text-xs text-gray-600">
+                      {v.tools.map((t) => (t.kind === "agent" ? t.name : t.key)).join(", ")}
+                    </span>
                   ) : (
                     <span className="text-xs text-gray-400">none</span>
                   ),
@@ -102,13 +109,14 @@ export default function AgentDetailPage() {
         )}
       </section>
 
-      {tools && (
+      {tools && allAgents && (
         <PublishVersionDrawer
           open={publishOpen}
           onClose={() => setPublishOpen(false)}
           workspaceId={workspaceId}
           agentId={agentId}
           availableTools={tools}
+          availableSubAgents={allAgents.filter((a: AgentSummary) => a.id !== agentId)}
           latestVersion={latestVersion}
           onPublished={() => mutateVersions()}
         />
@@ -123,6 +131,7 @@ function PublishVersionDrawer({
   workspaceId,
   agentId,
   availableTools,
+  availableSubAgents,
   latestVersion,
   onPublished,
 }: {
@@ -131,6 +140,7 @@ function PublishVersionDrawer({
   workspaceId: string;
   agentId: string;
   availableTools: Tool[];
+  availableSubAgents: AgentSummary[];
   latestVersion: AgentVersion | undefined;
   onPublished: () => void;
 }) {
@@ -139,8 +149,14 @@ function PublishVersionDrawer({
   const [maxSteps, setMaxSteps] = useState("");
   const [selectedToolIds, setSelectedToolIds] = useState<Set<string>>(new Set());
   const [toolConfigs, setToolConfigs] = useState<Record<string, string>>({});
+  const [selectedSubAgentIds, setSelectedSubAgentIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Agent-kind tools are exclusively managed by the Sub-agents picker below,
+  // never by this checklist -- see the prefill effect's comment for why
+  // double-submitting one through both would fail at the database.
+  const attachableTools = availableTools.filter((t) => t.kind !== "agent");
 
   // Prefill from the latest version when the drawer opens, so publishing a
   // tweak doesn't mean retyping the whole prompt and re-picking every tool.
@@ -149,12 +165,29 @@ function PublishVersionDrawer({
     setSystemPrompt(latestVersion?.system_prompt ?? "");
     setModelTier((latestVersion?.model_tier as (typeof MODEL_TIERS)[number]) ?? "sonnet");
     setMaxSteps(latestVersion?.max_steps != null ? String(latestVersion.max_steps) : "");
-    setSelectedToolIds(new Set(latestVersion?.tools.map((t) => t.tool_id) ?? []));
-    setToolConfigs(
-      Object.fromEntries((latestVersion?.tools ?? []).map((t) => [t.tool_id, JSON.stringify(t.config, null, 2)]))
-    );
+    // Agent-kind tools are excluded here -- they're exclusively managed by
+    // the Sub-agents picker below, never by this checklist. Prefilling them
+    // into both would double-submit the same tool_id in body.tools *and*
+    // via sub_agent_ids, which agent_version_tools' own primary key
+    // (agent_version_id, tool_id) would then reject as a duplicate insert.
+    const attachableTools = (latestVersion?.tools ?? []).filter((t) => t.kind !== "agent");
+    setSelectedToolIds(new Set(attachableTools.map((t) => t.tool_id)));
+    setToolConfigs(Object.fromEntries(attachableTools.map((t) => [t.tool_id, JSON.stringify(t.config, null, 2)])));
+    setSelectedSubAgentIds(new Set(latestVersion?.sub_agent_ids ?? []));
     setError(null);
   }, [open, latestVersion]);
+
+  function toggleSubAgent(subAgentId: string) {
+    setSelectedSubAgentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(subAgentId)) {
+        next.delete(subAgentId);
+      } else {
+        next.add(subAgentId);
+      }
+      return next;
+    });
+  }
 
   function toggleTool(toolId: string) {
     setSelectedToolIds((prev) => {
@@ -195,10 +228,7 @@ function PublishVersionDrawer({
             system_prompt: systemPrompt,
             model_tier: modelTier,
             max_steps: maxSteps ? Number(maxSteps) : null,
-            // Agent-as-tool (sub_agent_ids) isn't exposed in this form: wiring
-            // it up needs an 'agent' kind tool with matching config.sub_agent_id
-            // too (tool_gateway.py), a two-step setup left as API-only for now.
-            sub_agent_ids: [],
+            sub_agent_ids: Array.from(selectedSubAgentIds),
             tools: toolPayload,
           },
         })
@@ -265,11 +295,11 @@ function PublishVersionDrawer({
 
         <div>
           <span className="block text-sm font-medium text-gray-700">Tools</span>
-          {availableTools.length === 0 ? (
+          {attachableTools.length === 0 ? (
             <p className="mt-1 text-sm text-gray-500">No tools yet — create one on the Tools page first.</p>
           ) : (
             <div className="mt-1 space-y-2">
-              {availableTools.map((tool) => (
+              {attachableTools.map((tool) => (
                 <div key={tool.id} className="rounded-md border border-gray-200 p-2">
                   <label className="flex items-center gap-2 text-sm">
                     <input
@@ -293,6 +323,32 @@ function PublishVersionDrawer({
               ))}
             </div>
           )}
+        </div>
+
+        <div>
+          <span className="block text-sm font-medium text-gray-700">Sub-agents (agent-as-tool)</span>
+          {availableSubAgents.length === 0 ? (
+            <p className="mt-1 text-sm text-gray-500">
+              No other agents in this workspace yet — create one to delegate to it.
+            </p>
+          ) : (
+            <div className="mt-1 space-y-1">
+              {availableSubAgents.map((a) => (
+                <label key={a.id} className="flex items-center gap-2 rounded-md border border-gray-200 p-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selectedSubAgentIds.has(a.id)}
+                    onChange={() => toggleSubAgent(a.id)}
+                  />
+                  {a.name}
+                </label>
+              ))}
+            </div>
+          )}
+          <p className="mt-1 text-xs text-gray-500">
+            Lets this agent call another agent as a tool, mid-conversation — publishing
+            automatically wires up the attachment, no separate tool setup needed.
+          </p>
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}

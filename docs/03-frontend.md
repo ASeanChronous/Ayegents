@@ -196,12 +196,57 @@ the orchestrator only ever populates `latency_ms`, never those two columns.
    Needed two more backend endpoints the detail page genuinely couldn't work without —
    `GET .../agents/{id}` and `GET .../agents/{id}/versions` (nesting each version's attached
    tools and `sub_agent_ids`) — added the same way as the run-inspector gaps earlier.
-   Agent-as-tool (`sub_agent_ids`) is deliberately not in this form: wiring it up for real
-   needs a matching `agent`-kind tool with `config.sub_agent_id` too
-   (`orchestrator_app/tool_gateway.py`), a two-step setup left API-only for now. Verified in a
-   real browser: created an agent, published a version with the `current_time` tool attached,
-   confirmed the version/tool attachment directly in Postgres (not just the UI's table), and
-   confirmed reopening the drawer correctly prefilled from that version.
+   Agent-as-tool (`sub_agent_ids`) was deliberately left out of this form at the time — see
+   the dedicated writeup below for why and how it was closed.
+   Verified in a real browser: created an agent, published a version with the `current_time`
+   tool attached, confirmed the version/tool attachment directly in Postgres (not just the
+   UI's table), and confirmed reopening the drawer correctly prefilled from that version.
+
+   **Agent-as-tool UI, added later.** Letting an agent delegate to another agent mid-run
+   (`agent_version_subagents`) worked at the API layer the whole time `create_agent_version`
+   accepted `sub_agent_ids` — but only halfway: it recorded the delegation, never made it
+   actually callable. `tool_gateway.py`'s dispatch for a `kind = 'agent'` tool call never reads
+   `agent_version_subagents` at all; it only reads `agent_version_tools` joined to a `tools`
+   row of kind `'agent'` carrying `config.sub_agent_id`. Declaring a sub-agent and wiring up
+   the matching tool were two separate, manual steps nothing in this form or any other
+   automated — `sub_agent_ids: []` was hardcoded here specifically because of that gap.
+
+   Closed by moving the wiring into the backend: `create_agent_version`
+   (`agent_versions.py`) now finds-or-creates a `kind = 'agent'` tool per `(workspace,
+   sub-agent)` pair (`tools.key = f"agent-{sub_agent_id}"`, doubling as the find-or-create
+   lookup against `tools`' own `unique(workspace_id, key)`) and attaches it with the right
+   `config.sub_agent_id` automatically, for every `sub_agent_id` the caller provides — so
+   publishing a version that delegates to another agent is one action again, like attaching
+   any other tool. Also added, found while reading the existing code rather than through
+   testing: `sub_agent_id`s were never validated as belonging to the calling workspace at all
+   — any agent id from any workspace would have been accepted and, if ever run, loaded and
+   executed as a sub-agent. Fixed alongside the main feature (404 if the sub-agent isn't in
+   this workspace; 400 on self-reference).
+
+   Frontend: the publish-version drawer gained a "Sub-agents" checklist (new, next to Tools)
+   over the workspace's other agents, wired straight to `sub_agent_ids`. The existing Tools
+   checklist now excludes `kind = 'agent'` tools entirely — they're shown as a sub-agent name
+   in the version table's Tools column instead (`t.name`, set at creation time to "Delegate a
+   task to the '<agent>' agent", rather than the raw `agent-<uuid>` key) and are exclusively
+   managed through the new checklist now, not hand-attached. The manual "New tool" form
+   (`/tools`) had `agent` removed from its creatable kinds for the same reason — hand-creating
+   one there could only ever produce a tool with a missing or malformed `sub_agent_id`.
+
+   **Bug found and fixed during this pass**, by testing a real re-publish rather than just a
+   first publish: the drawer's own prefill reused the *same* `latestVersion.tools` list for
+   both the Tools checklist and (new) the Sub-agents checklist, so reopening the drawer on a
+   version that already delegated to a sub-agent prefilled that tool as checked in *both*
+   places — resubmitting unchanged would have sent the same `tool_id` once via `body.tools`
+   and once more via `sub_agent_ids`, hitting `agent_version_tools`' own primary key
+   `(agent_version_id, tool_id)` as a duplicate insert and failing the whole publish. Fixed by
+   filtering `kind = 'agent'` tools out of the Tools checklist and its prefill entirely, so
+   each tool_id now has exactly one checklist that can select it. Verified end to end against
+   the real Docker Postgres + API stack: published a manager agent delegating to a real
+   sub-agent, confirmed the `tools`/`agent_version_tools`/`agent_version_subagents` rows all
+   landed correctly and were reused (not duplicated) on a second publish with the same
+   sub-agent, confirmed the self-reference and cross-workspace rejections, then in a real
+   browser reproduced the exact prefill-then-republish sequence that had failed before the fix
+   and confirmed it now succeeds (`v3` published cleanly).
 5. **Done.** `/runs`: run list (agent name, status badge, tokens, started time) and a
    start-a-run drawer (pick an agent, JSON input). `/runs/[id]`: run inspector — status
    badge, input/output JSON panels, total tokens, finished time, and an expandable

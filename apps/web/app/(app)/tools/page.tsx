@@ -24,7 +24,12 @@ type Tool = {
 // form would just produce a tool that fails every dispatch with "no builtin
 // tool registered for key ...". Builtins are seeded by migration, not
 // created here.
-const CREATABLE_KINDS = ["http", "code_exec", "agent"] as const;
+// 'agent' also excluded: an agent-as-tool's key/config_schema/config
+// (config.sub_agent_id) all have one specific, interdependent shape that the
+// publish-version form's new "Sub-agents" picker (agents/[id]/page.tsx)
+// generates automatically -- hand-creating one here would just produce a
+// tool that fails dispatch with a malformed or missing sub_agent_id.
+const CREATABLE_KINDS = ["http", "code_exec"] as const;
 
 const KIND_TONE: Record<string, "blue" | "yellow" | "gray"> = {
   http: "blue",

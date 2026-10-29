@@ -632,6 +632,8 @@ export interface components {
             key: string;
             /** Name */
             name: string;
+            /** Kind */
+            kind: string;
             /** Config */
             config: {
                 [key: string]: unknown;
