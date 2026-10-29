@@ -499,6 +499,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/marketplace/listings/{listing_id}/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Checkout Session */
+        post: operations["create_checkout_session_workspaces__workspace_id__marketplace_listings__listing_id__checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/marketplace/listings/{listing_id}/purchase": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Purchase Status
+         * @description Whether this workspace has a completed purchase of this listing — the
+         *     frontend polls this right after a Checkout redirect-back (the webhook that
+         *     actually flips a purchase to 'paid' races the browser's own redirect, so
+         *     the UI can't just trust `?purchase=success` on its own) and also checks it
+         *     on a normal page load, so a workspace that paid earlier but never finished
+         *     installing isn't asked to pay a second time.
+         */
+        get: operations["get_purchase_status_workspaces__workspace_id__marketplace_listings__listing_id__purchase_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/{trigger_id}": {
         parameters: {
             query?: never;
@@ -510,6 +552,23 @@ export interface paths {
         put?: never;
         /** Fire Webhook */
         post: operations["fire_webhook_webhooks__trigger_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/stripe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stripe Webhook */
+        post: operations["stripe_webhook_webhooks_stripe_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -638,6 +697,11 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+        };
+        /** CheckoutOut */
+        CheckoutOut: {
+            /** Checkout Url */
+            checkout_url: string;
         };
         /** CredentialCreate */
         CredentialCreate: {
@@ -813,6 +877,11 @@ export interface components {
             description?: string | null;
             /** Category */
             category?: string | null;
+            /**
+             * Price Cents
+             * @default 0
+             */
+            price_cents: number;
         };
         /** ListingUpdate */
         ListingUpdate: {
@@ -822,6 +891,8 @@ export interface components {
             description?: string | null;
             /** Category */
             category?: string | null;
+            /** Price Cents */
+            price_cents?: number | null;
         };
         /** ListingVersionOut */
         ListingVersionOut: {
@@ -851,6 +922,11 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** PurchaseStatusOut */
+        PurchaseStatusOut: {
+            /** Paid */
+            paid: boolean;
         };
         /** ReviewOut */
         ReviewOut: {
@@ -1017,6 +1093,11 @@ export interface components {
             /** Finished At */
             finished_at: string | null;
         };
+        /** StripeWebhookOut */
+        StripeWebhookOut: {
+            /** Received */
+            received: boolean;
+        };
         /** ToolAttachment */
         ToolAttachment: {
             /**
@@ -1171,6 +1252,10 @@ export interface components {
             rating_count: number;
             /** Required Tool Categories */
             required_tool_categories: string[];
+            /** Price Cents */
+            price_cents: number;
+            /** Currency */
+            currency: string;
         };
         /** WorkspaceOut */
         WorkspaceOut: {
@@ -1207,6 +1292,10 @@ export interface components {
             rating_count: number;
             /** Required Tool Categories */
             required_tool_categories: string[];
+            /** Price Cents */
+            price_cents: number;
+            /** Currency */
+            currency: string;
         };
         /** ListingOut */
         app__routers__marketplace__ListingOut: {
@@ -2440,6 +2529,70 @@ export interface operations {
             };
         };
     };
+    create_checkout_session_workspaces__workspace_id__marketplace_listings__listing_id__checkout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                listing_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_purchase_status_workspaces__workspace_id__marketplace_listings__listing_id__purchase_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                listing_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurchaseStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fire_webhook_webhooks__trigger_id__post: {
         parameters: {
             query?: never;
@@ -2460,6 +2613,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stripe_webhook_webhooks_stripe_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Stripe-Signature"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StripeWebhookOut"];
                 };
             };
             /** @description Validation Error */

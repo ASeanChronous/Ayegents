@@ -5,10 +5,14 @@
  * disabled until all are checked. This is a client-side nicety only; the API's 403 (missing
  * categories) is the real enforcement, this just saves the round trip a partial approval
  * would otherwise need to fail first. A listing with no required categories skips the
- * checklist and is installable immediately. */
+ * checklist and is installable immediately.
+ *
+ * A priced listing (price_cents > 0) gates this whole panel behind a completed Stripe
+ * Checkout purchase (routers/payments.py) -- see PurchaseGate below. A free listing (the
+ * overwhelming majority, and the only kind that existed before this) skips it entirely. */
 import { useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 
 import { api, unwrap, ApiError } from "@/lib/api";
@@ -16,8 +20,14 @@ import { useWorkspace } from "@/lib/useWorkspace";
 import { Badge } from "@/components/Badge";
 import { ReviewsSection } from "@/components/marketplace/ReviewsSection";
 
+function formatPrice(priceCents: number, currency: string) {
+  if (priceCents === 0) return "Free";
+  return (priceCents / 100).toLocaleString(undefined, { style: "currency", currency: currency.toUpperCase() });
+}
+
 export default function ListingDetailPage() {
   const { id: listingId } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id;
 
@@ -32,6 +42,45 @@ export default function ListingDetailPage() {
   const [installResult, setInstallResult] = useState<{ installed_agent_id: string | null; installed_flow_id: string | null } | null>(
     null
   );
+
+  const isPaidListing = (listing?.price_cents ?? 0) > 0;
+  // Right after a Checkout redirect-back, the webhook that actually flips the
+  // purchase to 'paid' races the browser's own redirect -- so while
+  // ?purchase=success is in the URL and the purchase isn't confirmed paid
+  // yet, poll every 1.5s instead of trusting the query param alone.
+  const justReturnedFromCheckout = searchParams.get("purchase") === "success";
+  const { data: purchase } = useSWR(
+    workspaceId && listingId && isPaidListing
+      ? `/workspaces/${workspaceId}/marketplace/listings/${listingId}/purchase`
+      : null,
+    () =>
+      unwrap(
+        api.GET("/workspaces/{workspace_id}/marketplace/listings/{listing_id}/purchase", {
+          params: { path: { workspace_id: workspaceId!, listing_id: listingId } },
+        })
+      ),
+    { refreshInterval: (latest) => (justReturnedFromCheckout && !latest?.paid ? 1500 : 0) }
+  );
+
+  const [checkingOut, setCheckingOut] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+
+  async function handleBuy() {
+    if (!workspaceId || !listing) return;
+    setCheckingOut(true);
+    setCheckoutError(null);
+    try {
+      const { checkout_url } = await unwrap(
+        api.POST("/workspaces/{workspace_id}/marketplace/listings/{listing_id}/checkout", {
+          params: { path: { workspace_id: workspaceId, listing_id: listing.id } },
+        })
+      );
+      window.location.href = checkout_url;
+    } catch (e) {
+      setCheckoutError(e instanceof ApiError ? e.message : "Failed to start checkout");
+      setCheckingOut(false);
+    }
+  }
 
   function toggleCategory(category: string) {
     setApproved((prev) => {
@@ -90,6 +139,10 @@ export default function ListingDetailPage() {
             </div>
           )}
           <div>
+            <dt className="inline">Price: </dt>
+            <dd className="inline font-medium text-gray-700">{formatPrice(listing.price_cents, listing.currency)}</dd>
+          </div>
+          <div>
             <dt className="inline">Installs: </dt>
             <dd className="inline">{listing.install_count}</dd>
           </div>
@@ -116,6 +169,29 @@ export default function ListingDetailPage() {
             open it
           </Link>
           .
+        </div>
+      ) : isPaidListing && !purchase?.paid ? (
+        <div className="space-y-3 rounded-md border border-gray-200 p-4">
+          {searchParams.get("purchase") === "cancelled" && (
+            <p className="text-sm text-gray-500">Checkout cancelled — no charge was made.</p>
+          )}
+          {justReturnedFromCheckout ? (
+            <p className="text-sm text-gray-500">Confirming your payment…</p>
+          ) : (
+            <>
+              <h2 className="text-sm font-medium text-gray-700">
+                Buy this listing to install it into {currentWorkspace?.name ?? "this workspace"}
+              </h2>
+              {checkoutError && <p className="text-sm text-red-600">{checkoutError}</p>}
+              <button
+                onClick={handleBuy}
+                disabled={checkingOut}
+                className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+              >
+                {checkingOut ? "Redirecting to checkout…" : `Buy for ${formatPrice(listing.price_cents, listing.currency)}`}
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div className="space-y-3 rounded-md border border-gray-200 p-4">

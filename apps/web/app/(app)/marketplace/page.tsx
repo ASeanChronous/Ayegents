@@ -21,9 +21,16 @@ type Listing = {
   rating_avg: number | null;
   rating_count: number;
   required_tool_categories: string[];
+  price_cents: number;
+  currency: string;
 };
 
 type MyListing = Listing & { status: string };
+
+function formatPrice(priceCents: number, currency: string) {
+  if (priceCents === 0) return "Free";
+  return (priceCents / 100).toLocaleString(undefined, { style: "currency", currency: currency.toUpperCase() });
+}
 
 type InstallHistoryItem = {
   id: string;
@@ -119,6 +126,7 @@ export default function MarketplacePage() {
     },
     { header: "Kind", render: (l: Listing) => <Badge tone={l.kind === "flow" ? "blue" : "gray"}>{l.kind}</Badge> },
     { header: "Category", render: (l: Listing) => l.category ?? <span className="text-gray-400">—</span> },
+    { header: "Price", render: (l: Listing) => formatPrice(l.price_cents, l.currency) },
     { header: "Installs", render: (l: Listing) => l.install_count },
     {
       header: "Rating",

@@ -20,6 +20,8 @@ class ListingOut(BaseModel):
     rating_avg: float | None
     rating_count: int
     required_tool_categories: list[str]
+    price_cents: int
+    currency: str
 
 
 class ReviewOut(BaseModel):
@@ -44,7 +46,7 @@ async def browse_listings(category: str | None = None, user_id: UUID = Depends(g
     rows = await pool.fetch(
         f"""
         select id, {_KIND_SQL}, name, description, category, install_count, rating_avg, rating_count,
-               required_tool_categories
+               required_tool_categories, price_cents, currency
         from listings
         where status = 'published' and ($1::text is null or category = $1)
         order by install_count desc
@@ -60,7 +62,7 @@ async def get_listing(listing_id: UUID, user_id: UUID = Depends(get_current_user
     row = await pool.fetchrow(
         f"""
         select id, {_KIND_SQL}, name, description, category, install_count, rating_avg, rating_count,
-               required_tool_categories
+               required_tool_categories, price_cents, currency
         from listings
         where id = $1 and status = 'published'
         """,

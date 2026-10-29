@@ -49,6 +49,12 @@ class ListingCreate(BaseModel):
     name: str
     description: str | None = None
     category: str | None = None
+    # 0 (the default) is a free listing -- installable directly, no Checkout
+    # involved (routers/payments.py). currency is fixed at 'usd' for now, not
+    # exposed as a field here: multi-currency pricing is a real product
+    # decision (which currencies, how a buyer's Checkout picks one) this pass
+    # doesn't make, not an oversight.
+    price_cents: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def _exactly_one_source(self) -> "ListingCreate":
@@ -74,6 +80,8 @@ class WorkspaceListingOut(BaseModel):
     rating_avg: float | None
     rating_count: int
     required_tool_categories: list[str]
+    price_cents: int
+    currency: str
 
 
 # Same one-word "kind" listings.py's public browse derives (source_agent_id/
@@ -84,7 +92,10 @@ _KIND_SQL = "case when source_agent_id is not null then 'agent' else 'flow' end 
 
 # Shared by every owner's-eye endpoint that returns a WorkspaceListingOut
 # (list/update/unpublish) so the column list only has to change in one place.
-_WORKSPACE_LISTING_COLUMNS = f"id, {_KIND_SQL}, name, description, category, status, install_count, rating_avg, rating_count, required_tool_categories"
+_WORKSPACE_LISTING_COLUMNS = (
+    f"id, {_KIND_SQL}, name, description, category, status, install_count, rating_avg, rating_count, "
+    "required_tool_categories, price_cents, currency"
+)
 
 
 @listings_router.get("", response_model=list[WorkspaceListingOut])
@@ -107,6 +118,7 @@ class ListingUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     category: str | None = None
+    price_cents: int | None = Field(default=None, ge=0)
 
 
 @listings_router.patch("/{listing_id}", response_model=WorkspaceListingOut)
@@ -198,8 +210,8 @@ async def create_listing(workspace_id: UUID, body: ListingCreate, user_id: UUID 
 
         row = await conn.fetchrow(
             """
-            insert into listings (workspace_id, source_agent_id, source_flow_id, name, description, category)
-            values ($1, $2, $3, $4, $5, $6)
+            insert into listings (workspace_id, source_agent_id, source_flow_id, name, description, category, price_cents)
+            values ($1, $2, $3, $4, $5, $6, $7)
             returning id, name, status
             """,
             workspace_id,
@@ -208,6 +220,7 @@ async def create_listing(workspace_id: UUID, body: ListingCreate, user_id: UUID 
             body.name,
             body.description,
             body.category,
+            body.price_cents,
         )
     return ListingOut(**dict(row))
 
@@ -477,6 +490,27 @@ async def install_listing(workspace_id: UUID, body: InstallCreate, user_id: UUID
                 status_code=403,
                 detail=f"must approve all required tool categories before installing: {sorted(missing)}",
             )
+
+        if listing["price_cents"] > 0:
+            # Same gate shape as the tool-category approval just above -- a
+            # paid listing checks for a completed purchase (routers/payments.py)
+            # the same way a free one checks for approved categories, both
+            # refusing the install outright rather than letting it through
+            # and hoping the client already did the right thing.
+            paid = await conn.fetchval(
+                """
+                select exists(
+                    select 1 from listing_purchases
+                    where listing_id = $1 and purchasing_workspace_id = $2 and status = 'paid'
+                )
+                """,
+                listing["id"],
+                workspace_id,
+            )
+            if not paid:
+                raise HTTPException(
+                    status_code=402, detail="this listing requires payment — complete checkout before installing"
+                )
 
         spec = listing_version["spec"]
         installed_agent_id: UUID | None = None

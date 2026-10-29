@@ -35,8 +35,9 @@ Explicitly **not** in this phase:
   list once built.
 - Editing a listing's name/description/category after creation, or unpublishing one.
   **Done** — see §9 below; moved out of this deferred list once built.
-- Monetization UI (price, payment). Architecture doc §6: "V1 marketplace: free listings only
-  ... Monetization ... deferred," unchanged.
+- Monetization UI (price, payment). **Done** — see §10 below; moved out of this deferred
+  list once built, though deliberately scoped narrower than architecture doc §6's full
+  "revenue share, paid listings" — see that section for exactly what "narrower" means.
 
 ## 2. Needed backend endpoints
 
@@ -309,3 +310,96 @@ In a real browser: edited a listing's description, confirmed it updated on the p
 page; unpublished a published listing and confirmed, without any reload, its row flipped to
 `archived` with the Unpublish button replaced by "Publish" and it vanished from the Browse tab
 at the same time.
+
+## 10. Monetization UI
+
+**Done, scoped narrower than architecture doc §6's full "revenue share, paid listings."**
+A listing can carry a price and be bought via Stripe Checkout, gating install the same way
+tool-category approval already does. What this does **not** build: creator payouts. Funds
+settle into the *platform's own* Stripe account; a listing's publisher doesn't receive a
+share of what it earns. Stripe Connect onboarding (KYC, tax-form collection, payout
+scheduling) for that is a real, separate undertaking with real compliance tradeoffs this
+pass deliberately didn't make — architecture doc §10 already calls "monetized marketplace
+listings" out as V2 scope, distinct from "listings can have a price and be bought," which is
+what this closes. `services/api/app/routers/payments.py`'s own docstring has the full
+reasoning, and the UI says as much too: the publish form's price field is captioned "No
+payouts yet — proceeds go to the platform account," not left implicit.
+
+Design:
+- `listings.price_cents`/`listings.currency` (migration `0008_listing_pricing.sql`) — 0 is
+  free, the only value every listing had before this. A new `listing_purchases` table is one
+  row per Stripe Checkout Session, not per successful purchase, so an abandoned or expired
+  session stays `'pending'` rather than never having existed (useful for debugging, and makes
+  `stripe_checkout_session_id` a reliable webhook idempotency key — see below).
+- `POST .../marketplace/listings/{id}/checkout` creates a Checkout Session with `price_data`
+  built inline from the listing's *current* `price_cents`/`currency` at call time, not a
+  pre-created Stripe Price/Product kept in sync with listing edits — a listing's price can
+  change (`PATCH`, below), and this way every new session just reads whatever's in the
+  database right now. Blocks a free listing (400, "install it directly"), an already-installed
+  workspace (409), and reports a Stripe-side failure as a clean 502 rather than a raw
+  exception.
+- `POST /webhooks/stripe` confirms the purchase: verifies the request is really from Stripe
+  (`stripe.Webhook.construct_event` against a configured webhook secret, same posture the
+  existing trigger webhook's `X-Webhook-Secret` check already has) and flips the matching
+  `listing_purchases` row to `'paid'` on `checkout.session.completed`, gated on
+  `status = 'pending'` in the `where` clause so a retried webhook delivery (Stripe's own
+  at-least-once guarantee) is a no-op the second time rather than re-stamping `paid_at`.
+  **Real bug found and fixed while wiring this up, not through testing**: this route has to
+  be registered *before* the existing trigger-webhook router in `main.py` — `POST
+  /webhooks/{trigger_id}` is a path parameter that would otherwise greedily match "stripe" as
+  a `trigger_id` and shadow `POST /webhooks/stripe` entirely, since FastAPI matches routes in
+  registration order. Caught immediately once end-to-end testing actually exercised the
+  webhook path (a 422 "invalid UUID" instead of the expected 200 made the collision obvious),
+  fixed by reordering the two `include_router` calls, with a comment explaining why the order
+  matters so it doesn't regress if a third webhook route is ever added later.
+- `GET .../marketplace/listings/{id}/purchase` — whether this workspace has a completed
+  purchase. The frontend polls this right after a Checkout redirect-back (the webhook that
+  actually confirms payment races the browser's own redirect, so `?purchase=success` in the
+  URL alone can't be trusted) and also checks it on a normal page load, so a workspace that
+  paid earlier but never finished installing isn't asked to pay a second time.
+- `POST .../marketplace/installs` gates a priced listing's install on a `'paid'`
+  `listing_purchases` row for that exact `(listing_id, workspace_id)` pair, the same shape the
+  existing tool-category-approval gate already has — refuse outright (402) rather than let an
+  unpaid install through.
+- `ListingCreate`/`ListingUpdate` gained `price_cents` (validated `>= 0`); `currency` isn't a
+  client-settable field yet, fixed at `'usd'` — multi-currency pricing (which currencies, how
+  a buyer's Checkout session would pick one) is a real product decision this pass didn't make,
+  not an oversight.
+- Frontend: `PublishListingDrawer`/`EditListingDrawer` gained a "Price (USD)" dollars input
+  (converted to `price_cents` only at submit time), blank meaning free. The listing detail
+  page (`/marketplace/[id]`) branches on `price_cents > 0 && !purchase?.paid`: a priced,
+  unpurchased listing shows a "Buy for $X.XX" button instead of the approve-and-install panel;
+  clicking it redirects to Stripe's own hosted Checkout page (`window.location.href`, not a
+  fetch — a real cross-origin redirect is the point). Handles all three return states a
+  Checkout redirect-back can leave the page in: `?purchase=success` with payment not yet
+  confirmed ("Confirming your payment…", via the polling `useSWR` above),
+  `?purchase=cancelled` ("Checkout cancelled — no charge was made," then the Buy button
+  again), and a purchase already confirmed paid (the normal install panel, unchanged from
+  before this pass). Both marketplace tables (`Browse`, `My listings`) gained a "Price"
+  column showing "Free" or a formatted currency amount.
+
+Verified against the real Docker Postgres + API stack, Stripe itself mocked (`stripe.checkout.
+Session.create` and `stripe.Webhook.construct_event` monkeypatched) rather than hit for real,
+since this pass has no live Stripe account to test against — the real, unmocked signature
+verification was exercised separately (a forged `Stripe-Signature` header against the actual
+`construct_event` correctly 400s). Via an in-process ASGI client against the real app and real
+database: created a Checkout session for a priced listing, confirmed the resulting
+`listing_purchases` row and that install was blocked (402) before payment; fired a mocked
+`checkout.session.completed` webhook event and confirmed the purchase flipped to `'paid'` and
+install then succeeded (201, correct `installed_agent_id`); fired the identical webhook event
+a second time and confirmed no error and no double-processing (idempotency); confirmed
+checkout on an already-installed listing now 409s. Confirmed free listings are completely
+unaffected — checkout rejects them (400), direct install still works exactly as before. This
+same pass is what surfaced and fixed the webhook route-shadowing bug above — the test failed
+with an "invalid UUID" 422 before the fix and passed cleanly after. Then in a real browser:
+published a priced and a free listing, confirmed the Price column renders correctly on both
+marketplace tables; opened the priced listing from a workspace that hadn't bought it and
+confirmed the Buy gate (clicking Buy against the dummy Stripe key surfaced the Stripe error
+in the UI instead of failing silently); switched to a workspace with a confirmed purchase and
+confirmed it shows the normal install panel instead; navigated directly to
+`?purchase=success` and `?purchase=cancelled` and confirmed both render the right in-between
+state; opened both listings' Edit drawers and confirmed the Price field prefills correctly
+(blank for free, "9.99" for a $9.99 listing).
+
+`tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests, unaffected)
+all clean.

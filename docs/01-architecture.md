@@ -103,7 +103,7 @@ Why a separate Orchestrator from the API: run execution is long-running, retryab
 - **Install** = copies the listing's spec into the installing workspace as a new Agent/Flow instance, owned by that workspace from then on (fork, not reference) — avoids a published update silently changing behavior for installs that haven't opted in.
 - Permissions model: a listing must declare which tool *categories* it needs (e.g. "web search", "sends email", "reads your files"); installer approves those categories at install time, same pattern as OAuth consent screens.
 - Secrets (API keys the installed agent needs, e.g. the installer's own Slack token) are supplied by the installer post-install and stored workspace-scoped — never bundled into or visible to the listing publisher.
-- V1 marketplace: free listings only, ratings + install counts. Monetization (revenue share, paid listings) deferred — needs payment/compliance work, out of scope for MVP.
+- V1 marketplace: free listings only, ratings + install counts. Monetization (revenue share, paid listings) deferred — needs payment/compliance work, out of scope for MVP. **Update:** paid listings themselves are done (Stripe Checkout gates install, docs/05-frontend-marketplace.md §10) — a buyer can pay for a listing. Revenue share specifically (a publisher actually receiving a cut, via Stripe Connect onboarding/KYC/payouts) is still deferred; that's the compliance-heavy part this note was really about, and it's unchanged.
 
 ## 7. Security & sandboxing
 

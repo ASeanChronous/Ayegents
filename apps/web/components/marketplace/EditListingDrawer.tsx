@@ -14,6 +14,7 @@ type EditableListing = {
   name: string;
   description: string | null;
   category: string | null;
+  price_cents: number;
 };
 
 export function EditListingDrawer({
@@ -55,6 +56,7 @@ function EditForm({
   const [name, setName] = useState(listing.name);
   const [description, setDescription] = useState(listing.description ?? "");
   const [category, setCategory] = useState(listing.category ?? "");
+  const [priceDollars, setPriceDollars] = useState(listing.price_cents > 0 ? (listing.price_cents / 100).toFixed(2) : "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -66,7 +68,12 @@ function EditForm({
       await unwrap(
         api.PATCH("/workspaces/{workspace_id}/listings/{listing_id}", {
           params: { path: { workspace_id: workspaceId, listing_id: listing.id } },
-          body: { name, description: description || null, category: category || null },
+          body: {
+            name,
+            description: description || null,
+            category: category || null,
+            price_cents: priceDollars.trim() ? Math.round(parseFloat(priceDollars) * 100) : 0,
+          },
         })
       );
       onUpdated();
@@ -115,6 +122,24 @@ function EditForm({
           placeholder="optional"
           className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
         />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700" htmlFor="edit-listing-price">
+          Price (USD)
+        </label>
+        <input
+          id="edit-listing-price"
+          type="number"
+          min="0"
+          step="0.01"
+          value={priceDollars}
+          onChange={(e) => setPriceDollars(e.target.value)}
+          placeholder="0.00 — leave blank for free"
+          className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+        />
+        <p className="mt-1 text-xs text-gray-400">
+          Changing this only affects new purchases — it doesn't refund or re-charge anyone who already bought in.
+        </p>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
       <button

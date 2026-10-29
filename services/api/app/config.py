@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     # a browser (CORSMiddleware, main.py). Defaults to the local Next.js dev
     # server; set to the real deployed frontend origin(s) in production.
     cors_allowed_origins: str = "http://localhost:3000"
+    # Where Stripe Checkout redirects the buyer back to (routers/payments.py) --
+    # the frontend's own base origin, not this API's. Optional like the two
+    # settings below: a deployment that never configures Stripe just gets a 501
+    # from the checkout/webhook endpoints instead of failing to boot.
+    frontend_url: str = "http://localhost:3000"
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:

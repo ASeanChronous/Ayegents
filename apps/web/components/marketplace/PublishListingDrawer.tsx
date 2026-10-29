@@ -37,6 +37,10 @@ export function PublishListingDrawer({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("");
+  // Dollars, as the user types them -- converted to price_cents only at
+  // submit time, so "4.9" mid-type isn't forced through a cents conversion
+  // on every keystroke. Blank (the default) means free.
+  const [priceDollars, setPriceDollars] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -53,6 +57,7 @@ export function PublishListingDrawer({
             name,
             description: description || null,
             category: category || null,
+            price_cents: priceDollars.trim() ? Math.round(parseFloat(priceDollars) * 100) : 0,
           },
         })
       );
@@ -77,6 +82,7 @@ export function PublishListingDrawer({
       setName("");
       setDescription("");
       setCategory("");
+      setPriceDollars("");
       onClose();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to create listing");
@@ -201,6 +207,24 @@ export function PublishListingDrawer({
             placeholder="optional"
             className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
           />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700" htmlFor="listing-price">
+            Price (USD)
+          </label>
+          <input
+            id="listing-price"
+            type="number"
+            min="0"
+            step="0.01"
+            value={priceDollars}
+            onChange={(e) => setPriceDollars(e.target.value)}
+            placeholder="0.00 — leave blank for free"
+            className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+          />
+          <p className="mt-1 text-xs text-gray-400">
+            Paid via Stripe Checkout at install time. No payouts yet — proceeds go to the platform account.
+          </p>
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
