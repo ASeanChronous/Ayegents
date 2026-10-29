@@ -30,9 +30,7 @@ the result, unchanged.
    exists, exactly like anything built by hand in this workspace.
 
 Explicitly **not** in this phase:
-- Ratings/reviews UI. `listings.rating_avg`/`rating_count` exist in the schema and are
-  rendered read-only where already populated, but nothing in `marketplace.py` lets anyone
-  write a rating yet — that's its own backend project, not a frontend gap.
+- Ratings/reviews UI. **Done** — see §8 below; moved out of this deferred list once built.
 - An "installs" / library history page. **Done** — see §7 below; moved out of this deferred
   list once built.
 - Editing a listing's name/description/category after creation, or unpublishing one.
@@ -221,3 +219,53 @@ installs` returned both rows with the correct listing name/kind and `installed_a
 rows render with working links — the listing link opens the correct `/marketplace/[id]` detail
 page, and "open it" opens the correct `/agents/[id]` or `/flows/[id]`, the same forked records
 §6's verification already confirmed were fully functional.
+
+## 8. Ratings/reviews
+
+**Done.** The last item from §1's deferred list. `listings.rating_avg`/`rating_count` have
+existed since `0001_init_schema.sql` as aggregate columns with nothing to aggregate — this adds
+the table of individual reviews that actually feeds them, plus the endpoints and UI to write and
+read one.
+
+Schema (`0007_listing_reviews.sql`): `listing_reviews`, one row per `(listing_id,
+reviewing_workspace_id)` — a workspace, not a user, is the reviewing unit, matching every other
+marketplace interaction's own scope (install, "my listings"), and it keeps one listing from
+being review-bombed by several members of the same workspace voting the same opinion
+repeatedly. Writing one is gated on an `installs` row existing for that exact pair — reviewing
+something your workspace hasn't actually installed is refused, both by an RLS policy on the
+table and (the one that actually runs, since the API connects with pooled, not per-request RLS'd
+credentials — same split every other table in this project already has) a check in the write
+endpoint itself.
+
+Backend:
+- `GET /marketplace/listings/{listing_id}/reviews` (`listings.py`, public like browse/detail) —
+  every review on a published listing, newest first, each with the reviewing workspace's name
+  (not anonymous) and whether it's been edited.
+- `GET` / `PUT /workspaces/{workspace_id}/marketplace/listings/{listing_id}/review`
+  (`marketplace.py`) — this workspace's own review (`GET` returns `null` if none yet, so the
+  frontend can tell "leave a review" from "edit your review" apart and prefill the form) and the
+  upsert itself (`insert ... on conflict (listing_id, reviewing_workspace_id) do update`, so a
+  second submission from the same workspace edits in place rather than adding a second row).
+  Every write recomputes `listings.rating_avg`/`rating_count` from `listing_reviews` directly in
+  the same transaction, rather than incrementally adjusting the aggregate — an edit changes an
+  existing rating, which an incremental approach would have to special-case anyway.
+- `ListingOut`/`WorkspaceListingOut` both gained `rating_count` (only `rating_avg` was exposed
+  before this).
+
+Frontend: no new page — a `<ReviewsSection>` (new) at the bottom of `/marketplace/[id]`, the
+listing detail page already built in §5/§6. Shows every public review (reviewer workspace name,
+star rating, comment, edited-or-not) and, for whichever workspace is currently selected, a
+leave-or-edit form. The form shows for any selected workspace rather than first checking install
+status itself — the API's 403 for a workspace that hasn't installed yet is the real
+enforcement, surfaced as the form's own error message rather than re-derived client-side. The
+rating shown on the detail page and both marketplace list views (Browse, My listings) changed
+from a bare average to `"4.2 (3 reviews)"` / `"No reviews yet"`.
+
+Verified against the real Docker Postgres + API stack: `curl` confirmed `PUT .../review` 403s
+for a workspace that hasn't installed the listing, succeeds once it has, a second `PUT` from the
+same workspace edits the existing row rather than creating a second one, and `listings.rating_avg`/
+`rating_count` update correctly after each write. Then in a real browser: installed a listing
+into a workspace, left a 4-star review with a comment, confirmed it appeared in the public
+reviews list with the reviewing workspace's real name, edited it to 5 stars, confirmed the
+review updated in place (not duplicated) and the listing's displayed rating changed from "4.0 (1
+review)" to "5.0 (1 review)" without a page reload.

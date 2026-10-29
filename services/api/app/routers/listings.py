@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,7 +18,18 @@ class ListingOut(BaseModel):
     category: str | None
     install_count: int
     rating_avg: float | None
+    rating_count: int
     required_tool_categories: list[str]
+
+
+class ReviewOut(BaseModel):
+    id: UUID
+    reviewing_workspace_id: UUID
+    reviewing_workspace_name: str
+    rating: int
+    comment: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 # source_agent_id/source_flow_id is a storage-level xor (the schema's check
@@ -31,7 +43,8 @@ async def browse_listings(category: str | None = None, user_id: UUID = Depends(g
     pool = await get_pool()
     rows = await pool.fetch(
         f"""
-        select id, {_KIND_SQL}, name, description, category, install_count, rating_avg, required_tool_categories
+        select id, {_KIND_SQL}, name, description, category, install_count, rating_avg, rating_count,
+               required_tool_categories
         from listings
         where status = 'published' and ($1::text is null or category = $1)
         order by install_count desc
@@ -46,7 +59,8 @@ async def get_listing(listing_id: UUID, user_id: UUID = Depends(get_current_user
     pool = await get_pool()
     row = await pool.fetchrow(
         f"""
-        select id, {_KIND_SQL}, name, description, category, install_count, rating_avg, required_tool_categories
+        select id, {_KIND_SQL}, name, description, category, install_count, rating_avg, rating_count,
+               required_tool_categories
         from listings
         where id = $1 and status = 'published'
         """,
@@ -55,3 +69,26 @@ async def get_listing(listing_id: UUID, user_id: UUID = Depends(get_current_user
     if row is None:
         raise HTTPException(status_code=404, detail="listing not found or not published")
     return ListingOut(**dict(row))
+
+
+@router.get("/{listing_id}/reviews", response_model=list[ReviewOut])
+async def list_reviews(listing_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    pool = await get_pool()
+    listing_id_found = await pool.fetchval(
+        "select id from listings where id = $1 and status = 'published'", listing_id
+    )
+    if listing_id_found is None:
+        raise HTTPException(status_code=404, detail="listing not found or not published")
+
+    rows = await pool.fetch(
+        """
+        select r.id, r.reviewing_workspace_id, w.name as reviewing_workspace_name,
+               r.rating, r.comment, r.created_at, r.updated_at
+        from listing_reviews r
+        join workspaces w on w.id = r.reviewing_workspace_id
+        where r.listing_id = $1
+        order by r.created_at desc
+        """,
+        listing_id,
+    )
+    return [ReviewOut(**dict(r)) for r in rows]

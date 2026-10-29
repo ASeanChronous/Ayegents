@@ -14,14 +14,16 @@ import useSWR from "swr";
 import { api, unwrap, ApiError } from "@/lib/api";
 import { useWorkspace } from "@/lib/useWorkspace";
 import { Badge } from "@/components/Badge";
+import { ReviewsSection } from "@/components/marketplace/ReviewsSection";
 
 export default function ListingDetailPage() {
   const { id: listingId } = useParams<{ id: string }>();
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id;
 
-  const { data: listing, error: listingError } = useSWR(`/marketplace/listings/${listingId}`, () =>
-    unwrap(api.GET("/marketplace/listings/{listing_id}", { params: { path: { listing_id: listingId } } }))
+  const { data: listing, error: listingError, mutate: mutateListing } = useSWR(
+    `/marketplace/listings/${listingId}`,
+    () => unwrap(api.GET("/marketplace/listings/{listing_id}", { params: { path: { listing_id: listingId } } }))
   );
 
   const [approved, setApproved] = useState<Set<string>>(new Set());
@@ -91,12 +93,14 @@ export default function ListingDetailPage() {
             <dt className="inline">Installs: </dt>
             <dd className="inline">{listing.install_count}</dd>
           </div>
-          {listing.rating_avg != null && (
-            <div>
-              <dt className="inline">Rating: </dt>
-              <dd className="inline">{listing.rating_avg.toFixed(1)}</dd>
-            </div>
-          )}
+          <div>
+            <dt className="inline">Rating: </dt>
+            <dd className="inline">
+              {listing.rating_avg != null
+                ? `${listing.rating_avg.toFixed(1)} (${listing.rating_count} review${listing.rating_count === 1 ? "" : "s"})`
+                : "No reviews yet"}
+            </dd>
+          </div>
         </dl>
       </div>
 
@@ -145,6 +149,8 @@ export default function ListingDetailPage() {
           </button>
         </div>
       )}
+
+      <ReviewsSection listingId={listing.id} workspaceId={workspaceId} onReviewed={() => mutateListing()} />
     </div>
   );
 }

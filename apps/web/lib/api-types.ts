@@ -333,6 +333,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/marketplace/listings/{listing_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Reviews */
+        get: operations["list_reviews_marketplace_listings__listing_id__reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/listings": {
         parameters: {
             query?: never;
@@ -388,6 +405,39 @@ export interface paths {
         put?: never;
         /** Install Listing */
         post: operations["install_listing_workspaces__workspace_id__marketplace_installs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/marketplace/listings/{listing_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get My Review
+         * @description This workspace's own review of a listing, if any -- lets the frontend
+         *     tell "leave a review" from "edit your review" apart and prefill the form,
+         *     without the caller having to scan the full public list for its own row.
+         */
+        get: operations["get_my_review_workspaces__workspace_id__marketplace_listings__listing_id__review_get"];
+        /**
+         * Upsert Review
+         * @description Create or edit this workspace's review of a listing -- one row per
+         *     (listing, workspace) (listing_reviews' own unique constraint), so a
+         *     second call from the same workspace edits its existing review rather
+         *     than adding a second opinion from the same place. Gated on having
+         *     actually installed the listing (an `installs` row for this exact pair),
+         *     same "tried it first" bar the RLS policy on listing_reviews itself
+         *     encodes -- checked again here since this connection writes with the
+         *     pool's own privileges, not through RLS.
+         */
+        put: operations["upsert_review_workspaces__workspace_id__marketplace_listings__listing_id__review_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -719,6 +769,59 @@ export interface components {
             /** Required Tool Categories */
             required_tool_categories: string[];
         };
+        /** MyReviewOut */
+        MyReviewOut: {
+            /** Rating */
+            rating: number;
+            /** Comment */
+            comment: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ReviewOut */
+        ReviewOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Reviewing Workspace Id
+             * Format: uuid
+             */
+            reviewing_workspace_id: string;
+            /** Reviewing Workspace Name */
+            reviewing_workspace_name: string;
+            /** Rating */
+            rating: number;
+            /** Comment */
+            comment: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ReviewUpsert */
+        ReviewUpsert: {
+            /** Rating */
+            rating: number;
+            /** Comment */
+            comment?: string | null;
+        };
         /** RunCreate */
         RunCreate: {
             /** Agent Id */
@@ -984,6 +1087,8 @@ export interface components {
             install_count: number;
             /** Rating Avg */
             rating_avg: number | null;
+            /** Rating Count */
+            rating_count: number;
             /** Required Tool Categories */
             required_tool_categories: string[];
         };
@@ -1018,6 +1123,8 @@ export interface components {
             install_count: number;
             /** Rating Avg */
             rating_avg: number | null;
+            /** Rating Count */
+            rating_count: number;
             /** Required Tool Categories */
             required_tool_categories: string[];
         };
@@ -1922,6 +2029,37 @@ export interface operations {
             };
         };
     };
+    list_reviews_marketplace_listings__listing_id__reviews_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                listing_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_my_listings_workspaces__workspace_id__listings_get: {
         parameters: {
             query?: never;
@@ -2073,6 +2211,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstallOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_review_workspaces__workspace_id__marketplace_listings__listing_id__review_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                listing_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyReviewOut"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_review_workspaces__workspace_id__marketplace_listings__listing_id__review_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                listing_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyReviewOut"];
                 };
             };
             /** @description Validation Error */

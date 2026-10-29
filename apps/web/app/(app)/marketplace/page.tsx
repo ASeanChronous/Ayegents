@@ -18,6 +18,7 @@ type Listing = {
   category: string | null;
   install_count: number;
   rating_avg: number | null;
+  rating_count: number;
   required_tool_categories: string[];
 };
 
@@ -103,7 +104,12 @@ export default function MarketplacePage() {
     { header: "Installs", render: (l: Listing) => l.install_count },
     {
       header: "Rating",
-      render: (l: Listing) => (l.rating_avg != null ? l.rating_avg.toFixed(1) : <span className="text-gray-400">—</span>),
+      render: (l: Listing) =>
+        l.rating_avg != null ? (
+          `${l.rating_avg.toFixed(1)} (${l.rating_count})`
+        ) : (
+          <span className="text-gray-400">—</span>
+        ),
     },
   ];
 

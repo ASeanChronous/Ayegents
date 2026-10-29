@@ -34,7 +34,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from app.db import get_pool
 from app.deps import get_current_user_id
@@ -72,6 +72,7 @@ class WorkspaceListingOut(BaseModel):
     status: str
     install_count: int
     rating_avg: float | None
+    rating_count: int
     required_tool_categories: list[str]
 
 
@@ -93,7 +94,7 @@ async def list_my_listings(workspace_id: UUID, user_id: UUID = Depends(get_curre
     pool = await get_pool()
     rows = await pool.fetch(
         f"""
-        select id, {_KIND_SQL}, name, description, category, status, install_count, rating_avg,
+        select id, {_KIND_SQL}, name, description, category, status, install_count, rating_avg, rating_count,
                required_tool_categories
         from listings where workspace_id = $1 order by created_at desc
         """,
@@ -508,3 +509,87 @@ async def list_installs(workspace_id: UUID, user_id: UUID = Depends(get_current_
         workspace_id,
     )
     return [InstallHistoryItemOut(**dict(r)) for r in rows]
+
+
+class ReviewUpsert(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = None
+
+
+class MyReviewOut(BaseModel):
+    rating: int
+    comment: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@install_router.get("/listings/{listing_id}/review", response_model=MyReviewOut | None)
+async def get_my_review(workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    """This workspace's own review of a listing, if any -- lets the frontend
+    tell "leave a review" from "edit your review" apart and prefill the form,
+    without the caller having to scan the full public list for its own row."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "select rating, comment, created_at, updated_at from listing_reviews where listing_id = $1 and reviewing_workspace_id = $2",
+        listing_id,
+        workspace_id,
+    )
+    return MyReviewOut(**dict(row)) if row else None
+
+
+@install_router.put("/listings/{listing_id}/review", response_model=MyReviewOut)
+async def upsert_review(
+    workspace_id: UUID, listing_id: UUID, body: ReviewUpsert, user_id: UUID = Depends(get_current_user_id)
+):
+    """Create or edit this workspace's review of a listing -- one row per
+    (listing, workspace) (listing_reviews' own unique constraint), so a
+    second call from the same workspace edits its existing review rather
+    than adding a second opinion from the same place. Gated on having
+    actually installed the listing (an `installs` row for this exact pair),
+    same "tried it first" bar the RLS policy on listing_reviews itself
+    encodes -- checked again here since this connection writes with the
+    pool's own privileges, not through RLS.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        listing = await conn.fetchrow("select id from listings where id = $1 and status = 'published'", listing_id)
+        if listing is None:
+            raise HTTPException(status_code=404, detail="listing not found or not published")
+
+        installed = await conn.fetchval(
+            "select exists(select 1 from installs where listing_id = $1 and installing_workspace_id = $2)",
+            listing_id,
+            workspace_id,
+        )
+        if not installed:
+            raise HTTPException(status_code=403, detail="install this listing before reviewing it")
+
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                insert into listing_reviews (listing_id, reviewing_workspace_id, rating, comment, created_by)
+                values ($1, $2, $3, $4, $5)
+                on conflict (listing_id, reviewing_workspace_id)
+                do update set rating = excluded.rating, comment = excluded.comment, updated_at = now()
+                returning rating, comment, created_at, updated_at
+                """,
+                listing_id,
+                workspace_id,
+                body.rating,
+                body.comment,
+                user_id,
+            )
+            # Recomputed from listing_reviews directly rather than incrementally
+            # adjusted -- an edit changes an existing row's rating in place, which
+            # an incremental "add the delta" update would have to special-case
+            # anyway, so a plain aggregate is both simpler and can't drift.
+            await conn.execute(
+                """
+                update listings set
+                  rating_avg = (select avg(rating)::numeric(3,2) from listing_reviews where listing_id = $1),
+                  rating_count = (select count(*) from listing_reviews where listing_id = $1)
+                where id = $1
+                """,
+                listing_id,
+            )
+    return MyReviewOut(**dict(row))
