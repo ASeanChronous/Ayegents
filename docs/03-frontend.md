@@ -149,9 +149,55 @@ full detail the inspector needs (input, output, total_tokens, error, timestamps)
 
 Two things noticed while building this, not fixed (out of scope of adding the endpoints
 themselves, flagged so the inspector UI doesn't present them as meaningful): `total_cost_usd`
-and every step's `cost_usd` are always `0` — no model-tier pricing table exists yet to
-compute them from token counts. And `run_steps.started_at`/`finished_at` are always `null` —
-the orchestrator only ever populates `latency_ms`, never those two columns.
+and every step's `cost_usd` were always `0` — no model-tier pricing table existed yet to
+compute them from token counts (closed below, §6a). And `run_steps.started_at`/`finished_at`
+are always `null` — the orchestrator only ever populates `latency_ms`, never those two
+columns (still open).
+
+## 6a. Model-tier cost table
+
+**Done.** Closes the `total_cost_usd`/`cost_usd` gap noted above: a real per-tier $/token
+pricing table now exists (`services/orchestrator/orchestrator_app/model_router.py`'s
+`MODEL_PRICING_PER_TOKEN`), so every `agent_call` run step's dollar cost is computed from its
+actual `response.usage.input_tokens`/`output_tokens` instead of defaulting to 0.
+
+Design:
+- `MODEL_PRICING_PER_TOKEN` holds published per-million-token list prices for
+  haiku/sonnet/opus, converted to a per-token rate so `compute_cost_usd(tier, tokens_input,
+  tokens_output)` multiplies directly against the Anthropic SDK's usage counts with no further
+  conversion at the call site. This is a **list-price estimate**, not the account's actual
+  negotiated/cached rate — prompt-caching discounts (architecture doc §9a) aren't modeled, so
+  real spend will run at or below this number, never above it.
+- `executor.py`'s `_execute_agent_loop` computes `cost_usd` right next to where it already
+  reads `response.usage` for `tokens_input`/`tokens_output`, and writes it into the same
+  `run_steps` insert. `tool_call` steps (`_log_tool_step`) are untouched — a tool call has no
+  token cost, so `cost_usd` keeps its column default of `0` there, correctly.
+- `runs.total_cost_usd` is computed as `sum(run_steps.cost_usd)` for the run at the same two
+  places `total_tokens` is finalized — `executor.py`'s `run_single_agent` completion update,
+  and `flow_executor.py`'s success *and* failure updates (a flow that fails partway through
+  still ran — and paid for — the steps before the failure, so cost is summed there too, even
+  though `total_tokens` isn't currently threaded through that failure path — a separate,
+  pre-existing gap not opened by this change). Computed via a `select sum(...)` subquery
+  against `run_steps` rather than threading a running total through `_execute_agent_loop`'s
+  return value, since `run_agent_as_tool` (agent-as-tool delegation) already logs its steps
+  under the *parent* run_id — summing from `run_steps` after the fact picks those up for free,
+  no extra plumbing needed for the nested-delegation case.
+- Surfaced in the UI, since the fields were already wired through as `0`: the run inspector
+  (`/runs/[id]`) now shows an "Estimated cost" stat alongside total tokens, and each step in
+  the timeline shows its own cost when non-zero; the runs list (`/runs`) gained a "Cost"
+  column next to "Tokens". All three are explicitly labeled/titled as an estimate, not a
+  billing-accurate figure, per the list-price caveat above.
+
+Verified against the real Docker Postgres + API + orchestrator stack: ran a real agent (sonnet
+tier) through the orchestrator against a mocked Claude response with known `usage` counts,
+confirmed via `docker exec aeflow-pg psql` that the resulting `run_steps.cost_usd` row matched
+`tokens_input * 3.00/1e6 + tokens_output * 15.00/1e6` exactly, and that `runs.total_cost_usd`
+matched the sum across all of that run's steps. Then re-ran with an agent-as-tool delegation
+(a parent agent calling a sonnet sub-agent) and confirmed the sub-agent's steps' cost rolled
+up into the *parent* run's `total_cost_usd` correctly, since they share the same `run_id`.
+Finally, in a real browser: loaded `/runs` and confirmed the new Cost column renders, opened a
+run's inspector and confirmed both the "Estimated cost" stat and per-step costs render with
+the `<$0.01` / `$X.XX` formatting.
 
 ## 7. Phased build order
 

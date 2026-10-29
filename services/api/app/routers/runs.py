@@ -44,6 +44,7 @@ class RunListItemOut(BaseModel):
     flow_id: UUID | None
     is_draft: bool
     total_tokens: int
+    total_cost_usd: float
     created_at: datetime
     finished_at: datetime | None
 
@@ -54,9 +55,10 @@ class RunDetailOut(BaseModel):
     input: dict
     output: dict | None
     total_tokens: int
-    # Always 0 today — no model-tier pricing table exists yet to compute this
-    # from tokens (same gap as run_steps.cost_usd below). Exposed as-is
-    # rather than hidden, since the column is real; just not meaningful yet.
+    # Computed from each agent_call step's cost_usd (run_steps), which the
+    # orchestrator derives from orchestrator_app/model_router.py's
+    # per-tier $/token table -- a list-price estimate (no prompt-caching
+    # discount applied), not a billing-accurate figure.
     total_cost_usd: float
     error: str | None
     started_at: datetime | None
@@ -76,7 +78,7 @@ class RunStepOut(BaseModel):
     output: dict | None
     tokens_input: int
     tokens_output: int
-    cost_usd: float  # see RunDetailOut.total_cost_usd — always 0 today
+    cost_usd: float  # see RunDetailOut.total_cost_usd for how this is derived
     latency_ms: int | None
     status: str
     error: str | None
@@ -90,7 +92,7 @@ async def list_runs(workspace_id: UUID, user_id: UUID = Depends(get_current_user
     rows = await pool.fetch(
         """
         select id, status, agent_id, flow_id, draft_spec is not null as is_draft,
-               total_tokens, created_at, finished_at
+               total_tokens, total_cost_usd, created_at, finished_at
         from runs where workspace_id = $1
         order by created_at desc
         limit 100

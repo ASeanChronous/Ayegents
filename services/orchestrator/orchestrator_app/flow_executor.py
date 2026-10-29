@@ -111,7 +111,8 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                update runs set status = 'succeeded', output = $2, total_tokens = $3, finished_at = now()
+                update runs set status = 'succeeded', output = $2, total_tokens = $3, finished_at = now(),
+                    total_cost_usd = coalesce((select sum(cost_usd) from run_steps where run_id = $1), 0)
                 where id = $1
                 """,
                 run_id,
@@ -122,7 +123,11 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
     except Exception as exc:  # noqa: BLE001 — surfaced into the run row, not swallowed
         async with pool.acquire() as conn:
             await conn.execute(
-                "update runs set status = 'failed', error = $2, finished_at = now() where id = $1",
+                """
+                update runs set status = 'failed', error = $2, finished_at = now(),
+                    total_cost_usd = coalesce((select sum(cost_usd) from run_steps where run_id = $1), 0)
+                where id = $1
+                """,
                 run_id,
                 str(exc),
             )

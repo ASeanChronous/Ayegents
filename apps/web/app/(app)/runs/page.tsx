@@ -27,9 +27,17 @@ type Run = {
   flow_id: string | null;
   is_draft: boolean;
   total_tokens: number;
+  total_cost_usd: number;
   created_at: string;
   finished_at: string | null;
 };
+
+// List-price estimate, not a billing-accurate figure — see
+// orchestrator_app/model_router.py's MODEL_PRICING_PER_TOKEN.
+function formatCost(usd: number) {
+  if (usd === 0) return "$0";
+  return usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
+}
 
 function statusTone(status: string) {
   return STATUS_TONES[status as keyof typeof STATUS_TONES] ?? "gray";
@@ -108,6 +116,7 @@ export default function RunsPage() {
             },
             { header: "Status", render: (r) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> },
             { header: "Tokens", render: (r) => r.total_tokens },
+            { header: "Cost", render: (r) => formatCost(r.total_cost_usd) },
             { header: "Started", render: (r) => new Date(r.created_at).toLocaleString() },
           ]}
         />

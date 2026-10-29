@@ -32,10 +32,18 @@ type RunStep = {
   output: Record<string, unknown> | null;
   tokens_input: number;
   tokens_output: number;
+  cost_usd: number;
   latency_ms: number | null;
   status: string;
   error: string | null;
 };
+
+// List-price estimate, not a billing-accurate figure — see
+// orchestrator_app/model_router.py's MODEL_PRICING_PER_TOKEN.
+function formatCost(usd: number) {
+  if (usd === 0) return "$0";
+  return usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
+}
 
 export default function RunDetailPage() {
   const { id: runId } = useParams<{ id: string }>();
@@ -111,6 +119,12 @@ export default function RunDetailPage() {
           <dd className="font-medium">{run.total_tokens}</dd>
         </div>
         <div>
+          <dt className="text-gray-500">Estimated cost</dt>
+          <dd className="font-medium" title="List-price estimate, not a billing-accurate figure">
+            {formatCost(run.total_cost_usd)}
+          </dd>
+        </div>
+        <div>
           <dt className="text-gray-500">Finished</dt>
           <dd className="font-medium">{run.finished_at ? new Date(run.finished_at).toLocaleString() : "—"}</dd>
         </div>
@@ -165,6 +179,7 @@ function RunStepTimeline({ steps }: { steps: RunStep[] }) {
                 <span>
                   {step.tokens_input}+{step.tokens_output} tok
                 </span>
+                {step.cost_usd > 0 && <span>{formatCost(step.cost_usd)}</span>}
                 <span>{step.latency_ms != null ? `${step.latency_ms}ms` : "—"}</span>
                 <Badge tone={statusTone(step.status)}>{step.status}</Badge>
               </span>

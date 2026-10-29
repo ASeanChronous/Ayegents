@@ -955,6 +955,8 @@ export interface components {
             is_draft: boolean;
             /** Total Tokens */
             total_tokens: number;
+            /** Total Cost Usd */
+            total_cost_usd: number;
             /**
              * Created At
              * Format: date-time

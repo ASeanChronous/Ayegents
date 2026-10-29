@@ -20,7 +20,7 @@ import asyncpg
 from anthropic import AsyncAnthropic
 
 from orchestrator_app.config import settings
-from orchestrator_app.model_router import resolve_model_id
+from orchestrator_app.model_router import compute_cost_usd, resolve_model_id
 from orchestrator_app.notify import notify_run
 from orchestrator_app.tool_gateway import ToolDispatchError, dispatch_tool
 
@@ -58,7 +58,8 @@ async def run_single_agent(conn: asyncpg.Connection, run_id: UUID) -> None:
     await conn.execute(
         """
         update runs
-        set status = $2, output = $3, total_tokens = $4, error = $5, finished_at = now()
+        set status = $2, output = $3, total_tokens = $4, error = $5, finished_at = now(),
+            total_cost_usd = coalesce((select sum(cost_usd) from run_steps where run_id = $1), 0)
         where id = $1
         """,
         run_id,
@@ -197,14 +198,17 @@ async def _execute_agent_loop(
             assistant_content = [block.model_dump() for block in response.content]
             messages.append({"role": "assistant", "content": assistant_content})
 
+            cost_usd = compute_cost_usd(
+                agent_version["model_tier"], response.usage.input_tokens, response.usage.output_tokens
+            )
             async with _run_step_lock(conn, run_id):
                 step_index = await _next_step_index(conn, run_id)
                 await conn.execute(
                     """
                     insert into run_steps
                         (run_id, step_index, kind, agent_id, node_id, input, output,
-                         tokens_input, tokens_output, latency_ms, status)
-                    values ($1, $2, 'agent_call', $3, $4, $5, $6, $7, $8, $9, 'succeeded')
+                         tokens_input, tokens_output, cost_usd, latency_ms, status)
+                    values ($1, $2, 'agent_call', $3, $4, $5, $6, $7, $8, $9, $10, 'succeeded')
                     """,
                     run_id,
                     step_index,
@@ -214,6 +218,7 @@ async def _execute_agent_loop(
                     {"content": assistant_content},
                     response.usage.input_tokens,
                     response.usage.output_tokens,
+                    cost_usd,
                     latency_ms,
                 )
                 await notify_run(conn, run_id)
