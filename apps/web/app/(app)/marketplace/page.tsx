@@ -23,11 +23,21 @@ type Listing = {
 
 type MyListing = Listing & { status: string };
 
+type InstallHistoryItem = {
+  id: string;
+  listing_id: string;
+  listing_name: string;
+  listing_kind: string;
+  installed_agent_id: string | null;
+  installed_flow_id: string | null;
+  created_at: string;
+};
+
 export default function MarketplacePage() {
   const { currentWorkspace } = useWorkspace();
   const workspaceId = currentWorkspace?.id;
 
-  const [view, setView] = useState<"browse" | "mine">("browse");
+  const [view, setView] = useState<"browse" | "mine" | "installs">("browse");
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
 
@@ -45,6 +55,15 @@ export default function MarketplacePage() {
   const { data: flows } = useSWR(
     workspaceId ? `/workspaces/${workspaceId}/flows` : null,
     () => unwrap(api.GET("/workspaces/{workspace_id}/flows", { params: { path: { workspace_id: workspaceId! } } }))
+  );
+  const { data: installs, isLoading: installsLoading } = useSWR(
+    workspaceId ? `/workspaces/${workspaceId}/marketplace/installs` : null,
+    () =>
+      unwrap(
+        api.GET("/workspaces/{workspace_id}/marketplace/installs", {
+          params: { path: { workspace_id: workspaceId! } },
+        })
+      )
   );
 
   // Publishing (first time or a republish) changes what Browse should show
@@ -119,6 +138,14 @@ export default function MarketplacePage() {
         >
           My listings
         </button>
+        <button
+          onClick={() => setView("installs")}
+          className={`rounded-md border px-3 py-1 ${
+            view === "installs" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-700"
+          }`}
+        >
+          My installs
+        </button>
       </div>
 
       {publishError && <p className="text-sm text-red-600">{publishError}</p>}
@@ -136,6 +163,42 @@ export default function MarketplacePage() {
         )
       ) : !workspaceId ? (
         <p className="text-sm text-gray-500">Pick or create a workspace first.</p>
+      ) : view === "installs" ? (
+        installsLoading ? (
+          <p className="text-sm text-gray-500">Loading…</p>
+        ) : (
+          <DataTable<InstallHistoryItem>
+            rows={installs ?? []}
+            keyFn={(i) => i.id}
+            emptyMessage="Nothing installed into this workspace yet — install something from Browse to get started."
+            columns={[
+              {
+                header: "Listing",
+                render: (i) => (
+                  <Link href={`/marketplace/${i.listing_id}`} className="font-medium text-blue-600 hover:underline">
+                    {i.listing_name}
+                  </Link>
+                ),
+              },
+              {
+                header: "Kind",
+                render: (i) => <Badge tone={i.listing_kind === "flow" ? "blue" : "gray"}>{i.listing_kind}</Badge>,
+              },
+              {
+                header: "Installed as",
+                render: (i) => (
+                  <Link
+                    href={i.installed_agent_id ? `/agents/${i.installed_agent_id}` : `/flows/${i.installed_flow_id}`}
+                    className="font-medium text-blue-600 hover:underline"
+                  >
+                    open it
+                  </Link>
+                ),
+              },
+              { header: "Installed", render: (i) => new Date(i.created_at).toLocaleString() },
+            ]}
+          />
+        )
       ) : mineLoading ? (
         <p className="text-sm text-gray-500">Loading…</p>
       ) : (

@@ -30,6 +30,7 @@ node for a flow listing), not self-declared by the publisher — self-declaratio
 could understate what's actually used; derivation can't.
 """
 
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -472,3 +473,38 @@ async def install_listing(workspace_id: UUID, body: InstallCreate, user_id: UUID
             await conn.execute("update listings set install_count = install_count + 1 where id = $1", listing["id"])
 
     return InstallOut(id=install["id"], installed_agent_id=installed_agent_id, installed_flow_id=installed_flow_id)
+
+
+class InstallHistoryItemOut(BaseModel):
+    id: UUID
+    listing_id: UUID
+    listing_name: str
+    listing_kind: str
+    installed_agent_id: UUID | None
+    installed_flow_id: UUID | None
+    created_at: datetime
+
+
+@install_router.get("/installs", response_model=list[InstallHistoryItemOut])
+async def list_installs(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    """This workspace's install history (docs/05-frontend-marketplace.md §1's
+    deferred "installs/library history page") -- what's been installed here
+    and which listing it came from. The installed agent/flow already shows up
+    in /agents or /flows under its own name the moment it exists, same as
+    anything built locally; this is purely the provenance trail on top of
+    that, not a second copy of either listing page.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        select i.id, i.listing_id, l.name as listing_name,
+               case when l.source_agent_id is not null then 'agent' else 'flow' end as listing_kind,
+               i.installed_agent_id, i.installed_flow_id, i.created_at
+        from installs i
+        join listings l on l.id = i.listing_id
+        where i.installing_workspace_id = $1
+        order by i.created_at desc
+        """,
+        workspace_id,
+    )
+    return [InstallHistoryItemOut(**dict(r)) for r in rows]

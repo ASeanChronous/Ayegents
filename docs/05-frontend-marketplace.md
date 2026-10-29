@@ -33,11 +33,8 @@ Explicitly **not** in this phase:
 - Ratings/reviews UI. `listings.rating_avg`/`rating_count` exist in the schema and are
   rendered read-only where already populated, but nothing in `marketplace.py` lets anyone
   write a rating yet — that's its own backend project, not a frontend gap.
-- An "installs" / library history page (what this workspace has installed, from where). The
-  installed agent/flow already shows up in `/agents` or `/flows` under its own name the same
-  as anything built locally; a dedicated provenance view is a nice-to-have, not a blocker for
-  "I can publish and install things," and `installs` rows exist in the schema whenever this
-  does get built.
+- An "installs" / library history page. **Done** — see §7 below; moved out of this deferred
+  list once built.
 - Editing a listing's name/description/category after creation, or unpublishing one.
   `marketplace.py` has no endpoints for either — out of scope at the backend layer, so
   necessarily out of scope here too.
@@ -198,3 +195,29 @@ with no navigation needed.
 
 `tsc --noEmit`, `npm run build` (13 routes, two new — `/marketplace` and `/marketplace/[id]`),
 and `npm test` (9 tests, unaffected) all clean.
+
+## 7. Installs / library history page
+
+**Done.** The one item from §1's deferred list that got built after all — what this workspace
+has installed, and which listing each came from.
+
+No new page: a third tab, "My installs", on `/marketplace` next to Browse and My listings — the
+same tab-switcher pattern those two already use, rather than a fourth top-level nav entry for
+one more read-only table. Each row links out to the source listing (`/marketplace/{listing_id}`)
+and to the installed result (`/agents/{id}` or `/flows/{id}`, whichever `installed_agent_id`/
+`installed_flow_id` is set) — this page is purely the provenance trail connecting the two, not a
+duplicate of either.
+
+Backend gap, same shape as every other one in this project: `marketplace.py`'s `install_router`
+had `POST /installs` but no `GET` at all. Added `GET /workspaces/{workspace_id}/marketplace/
+installs`, joining `installs` to `listings` for the listing's name and kind (installs has no
+denormalized copy of either), ordered newest first, scoped to `installing_workspace_id` — the
+same column RLS already keys its one `installs` read policy on.
+
+Verified against the real Docker Postgres + API stack: installed one agent listing and one flow
+listing (as in §6's own verification pass) into a workspace via `curl`, confirmed `GET .../
+installs` returned both rows with the correct listing name/kind and `installed_agent_id`/
+`installed_flow_id`, then in a real browser clicked into the My installs tab and confirmed both
+rows render with working links — the listing link opens the correct `/marketplace/[id]` detail
+page, and "open it" opens the correct `/agents/[id]` or `/flows/[id]`, the same forked records
+§6's verification already confirmed were fully functional.

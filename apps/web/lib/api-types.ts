@@ -375,7 +375,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Installs
+         * @description This workspace's install history (docs/05-frontend-marketplace.md §1's
+         *     deferred "installs/library history page") -- what's been installed here
+         *     and which listing it came from. The installed agent/flow already shows up
+         *     in /agents or /flows under its own name the moment it exists, same as
+         *     anything built locally; this is purely the provenance trail on top of
+         *     that, not a second copy of either listing page.
+         */
+        get: operations["list_installs_workspaces__workspace_id__marketplace_installs_get"];
         put?: never;
         /** Install Listing */
         post: operations["install_listing_workspaces__workspace_id__marketplace_installs_post"];
@@ -646,6 +655,32 @@ export interface components {
              * @default []
              */
             approved_tool_categories: string[];
+        };
+        /** InstallHistoryItemOut */
+        InstallHistoryItemOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Listing Id
+             * Format: uuid
+             */
+            listing_id: string;
+            /** Listing Name */
+            listing_name: string;
+            /** Listing Kind */
+            listing_kind: string;
+            /** Installed Agent Id */
+            installed_agent_id: string | null;
+            /** Installed Flow Id */
+            installed_flow_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** InstallOut */
         InstallOut: {
@@ -1972,6 +2007,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListingVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_installs_workspaces__workspace_id__marketplace_installs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstallHistoryItemOut"][];
                 };
             };
             /** @description Validation Error */
