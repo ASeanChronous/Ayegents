@@ -34,8 +34,7 @@ Explicitly **not** in this phase:
 - An "installs" / library history page. **Done** — see §7 below; moved out of this deferred
   list once built.
 - Editing a listing's name/description/category after creation, or unpublishing one.
-  `marketplace.py` has no endpoints for either — out of scope at the backend layer, so
-  necessarily out of scope here too.
+  **Done** — see §9 below; moved out of this deferred list once built.
 - Monetization UI (price, payment). Architecture doc §6: "V1 marketplace: free listings only
   ... Monetization ... deferred," unchanged.
 
@@ -269,3 +268,44 @@ into a workspace, left a 4-star review with a comment, confirmed it appeared in 
 reviews list with the reviewing workspace's real name, edited it to 5 stars, confirmed the
 review updated in place (not duplicated) and the listing's displayed rating changed from "4.0 (1
 review)" to "5.0 (1 review)" without a page reload.
+
+## 9. Edit / unpublish a listing
+
+**Done.** The last item from §1's original deferred list.
+
+Backend (`marketplace.py`):
+- `PATCH /workspaces/{workspace_id}/listings/{listing_id}` — edits `name`/`description`/
+  `category`. Partial: `body.model_dump(exclude_unset=True)` means only fields actually present
+  in the request are touched, so an edit that only changes the description leaves name alone
+  rather than clearing it. Deliberately separate from "publish a new version"
+  (`POST .../versions`), which re-snapshots the *source* agent/flow and has nothing to do with
+  the listing's own metadata.
+- `POST /workspaces/{workspace_id}/listings/{listing_id}/unpublish` — takes a published listing
+  off the public browse by setting `status = 'archived'`, the third `publish_status` enum value
+  that's existed since `0001_init_schema.sql` with nothing ever setting it until now. 400s on
+  anything not currently `published` (unpublishing a draft is a no-op that would just be
+  confusing to allow). Deleting the row outright was never an option — `installs.listing_id` and
+  `listing_reviews.listing_id` both still reference it, and an unpublish doesn't touch anything
+  it already installed elsewhere anyway (an install forked its own independent copy at install
+  time). No new "re-publish" endpoint needed: `POST .../versions` already sets `status =
+  'published'` unconditionally regardless of what it was before, so it already re-lists an
+  archived listing for free.
+
+Frontend: `<EditListingDrawer>` (new) — the same `FormDrawer` pattern every other form here
+uses, keyed by the listing's id so switching which row is being edited remounts the form with
+fresh field values instead of inheriting a previous edit's leftover state. My listings' action
+column gained "Edit" (always) and "Unpublish" (only on a published row, red to mark it as the
+one state-changing action in that row that isn't reversible by just clicking it again — undoing
+it means publishing a new version). Both wire into the same `refreshListings()` every other
+write path here already calls, since unpublishing (like publishing) changes what Browse should
+show.
+
+Verified against the real Docker Postgres + API stack: `curl` confirmed unpublishing a draft
+400s, `PATCH` with only `{"name": ...}` left an existing `category` untouched, and a published
+listing disappeared from `GET /marketplace/listings` immediately after unpublish while still
+showing up (as `archived`) in the owner's own `GET .../listings` — then publishing a new version
+on it brought it back to `published` and back into Browse, with no new endpoint needed to do so.
+In a real browser: edited a listing's description, confirmed it updated on the public detail
+page; unpublished a published listing and confirmed, without any reload, its row flipped to
+`archived` with the Unpublish button replaced by "Publish" and it vanished from the Browse tab
+at the same time.

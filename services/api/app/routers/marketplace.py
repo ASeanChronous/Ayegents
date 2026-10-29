@@ -82,6 +82,10 @@ class WorkspaceListingOut(BaseModel):
 # self-contained, matching every other router in this project.
 _KIND_SQL = "case when source_agent_id is not null then 'agent' else 'flow' end as kind"
 
+# Shared by every owner's-eye endpoint that returns a WorkspaceListingOut
+# (list/update/unpublish) so the column list only has to change in one place.
+_WORKSPACE_LISTING_COLUMNS = f"id, {_KIND_SQL}, name, description, category, status, install_count, rating_avg, rating_count, required_tool_categories"
+
 
 @listings_router.get("", response_model=list[WorkspaceListingOut])
 async def list_my_listings(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
@@ -93,14 +97,86 @@ async def list_my_listings(workspace_id: UUID, user_id: UUID = Depends(get_curre
     # the workspace that owns it rather than silently invisible everywhere.
     pool = await get_pool()
     rows = await pool.fetch(
-        f"""
-        select id, {_KIND_SQL}, name, description, category, status, install_count, rating_avg, rating_count,
-               required_tool_categories
-        from listings where workspace_id = $1 order by created_at desc
-        """,
+        f"select {_WORKSPACE_LISTING_COLUMNS} from listings where workspace_id = $1 order by created_at desc",
         workspace_id,
     )
     return [WorkspaceListingOut(**dict(r)) for r in rows]
+
+
+class ListingUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    category: str | None = None
+
+
+@listings_router.patch("/{listing_id}", response_model=WorkspaceListingOut)
+async def update_listing(
+    workspace_id: UUID, listing_id: UUID, body: ListingUpdate, user_id: UUID = Depends(get_current_user_id)
+):
+    """Edit a listing's name/description/category -- the one thing publishing
+    a new version (POST .../versions) was never meant to cover, since that
+    re-snapshots the *source* agent/flow and has nothing to do with the
+    listing's own metadata. Partial: only fields actually present in the
+    request body are touched (model_dump(exclude_unset=True)), so passing
+    description without name leaves name alone rather than clearing it.
+    """
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="no fields to update")
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        listing = await conn.fetchrow(
+            "select id from listings where id = $1 and workspace_id = $2", listing_id, workspace_id
+        )
+        if listing is None:
+            raise HTTPException(status_code=404, detail="listing not found")
+
+        set_clauses = [f"{key} = ${i}" for i, key in enumerate(updates, start=1)]
+        row = await conn.fetchrow(
+            f"""
+            update listings set {", ".join(set_clauses)}, updated_at = now()
+            where id = ${len(updates) + 1}
+            returning {_WORKSPACE_LISTING_COLUMNS}
+            """,
+            *updates.values(),
+            listing_id,
+        )
+    return WorkspaceListingOut(**dict(row))
+
+
+@listings_router.post("/{listing_id}/unpublish", response_model=WorkspaceListingOut)
+async def unpublish_listing(workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+    """Takes a published listing off the public browse (listings.py's
+    browse_listings/get_listing both filter status = 'published') without
+    touching anything it already installed elsewhere -- an install already
+    forked its own independent agent/flow copy at install time, so there's
+    nothing live for this to retract. 'archived' (publish_status, already in
+    the schema since 0001_init_schema.sql, unused until now) rather than
+    deleting the row: install history (installs.listing_id) and existing
+    reviews (listing_reviews.listing_id) both still reference it. Publishing
+    a new version (already-existing endpoint, no change needed) re-lists it,
+    since that endpoint sets status = 'published' unconditionally regardless
+    of what it was before.
+    """
+    pool = await get_pool()
+    listing = await pool.fetchrow(
+        "select status from listings where id = $1 and workspace_id = $2", listing_id, workspace_id
+    )
+    if listing is None:
+        raise HTTPException(status_code=404, detail="listing not found")
+    if listing["status"] != "published":
+        raise HTTPException(status_code=400, detail="only a published listing can be unpublished")
+
+    row = await pool.fetchrow(
+        f"""
+        update listings set status = 'archived', updated_at = now()
+        where id = $1
+        returning {_WORKSPACE_LISTING_COLUMNS}
+        """,
+        listing_id,
+    )
+    return WorkspaceListingOut(**dict(row))
 
 
 @listings_router.post("", response_model=ListingOut, status_code=201)

@@ -9,6 +9,7 @@ import { useWorkspace } from "@/lib/useWorkspace";
 import { DataTable } from "@/components/DataTable";
 import { Badge } from "@/components/Badge";
 import { PublishListingDrawer } from "@/components/marketplace/PublishListingDrawer";
+import { EditListingDrawer } from "@/components/marketplace/EditListingDrawer";
 
 type Listing = {
   id: string;
@@ -41,6 +42,8 @@ export default function MarketplacePage() {
   const [view, setView] = useState<"browse" | "mine" | "installs">("browse");
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [editingListing, setEditingListing] = useState<MyListing | null>(null);
+  const [unpublishError, setUnpublishError] = useState<string | null>(null);
 
   const { data: listings, isLoading: browseLoading, mutate: mutateBrowse } = useSWR("/marketplace/listings", () =>
     unwrap(api.GET("/marketplace/listings"))
@@ -87,6 +90,21 @@ export default function MarketplacePage() {
       await refreshListings();
     } catch (e) {
       setPublishError(e instanceof ApiError ? e.message : "Failed to publish a new version");
+    }
+  }
+
+  async function handleUnpublish(listingId: string) {
+    if (!workspaceId) return;
+    setUnpublishError(null);
+    try {
+      await unwrap(
+        api.POST("/workspaces/{workspace_id}/listings/{listing_id}/unpublish", {
+          params: { path: { workspace_id: workspaceId, listing_id: listingId } },
+        })
+      );
+      await refreshListings();
+    } catch (e) {
+      setUnpublishError(e instanceof ApiError ? e.message : "Failed to unpublish listing");
     }
   }
 
@@ -155,6 +173,7 @@ export default function MarketplacePage() {
       </div>
 
       {publishError && <p className="text-sm text-red-600">{publishError}</p>}
+      {unpublishError && <p className="text-sm text-red-600">{unpublishError}</p>}
 
       {view === "browse" ? (
         browseLoading ? (
@@ -232,16 +251,21 @@ export default function MarketplacePage() {
             { header: "Status", render: (l) => <Badge tone={l.status === "published" ? "green" : "gray"}>{l.status}</Badge> },
             {
               header: "",
-              render: (l) =>
-                l.status === "published" ? (
-                  <button onClick={() => handleRepublish(l.id)} className="text-xs font-medium text-blue-600 hover:underline">
-                    Publish new version
+              render: (l) => (
+                <div className="flex gap-3">
+                  <button onClick={() => setEditingListing(l)} className="text-xs font-medium text-blue-600 hover:underline">
+                    Edit
                   </button>
-                ) : (
                   <button onClick={() => handleRepublish(l.id)} className="text-xs font-medium text-blue-600 hover:underline">
-                    Publish
+                    {l.status === "published" ? "Publish new version" : "Publish"}
                   </button>
-                ),
+                  {l.status === "published" && (
+                    <button onClick={() => handleUnpublish(l.id)} className="text-xs font-medium text-red-600 hover:underline">
+                      Unpublish
+                    </button>
+                  )}
+                </div>
+              ),
             },
           ]}
         />
@@ -255,6 +279,16 @@ export default function MarketplacePage() {
           agents={agents}
           flows={flows}
           onPublished={() => refreshListings()}
+        />
+      )}
+
+      {workspaceId && (
+        <EditListingDrawer
+          open={editingListing !== null}
+          onClose={() => setEditingListing(null)}
+          workspaceId={workspaceId}
+          listing={editingListing}
+          onUpdated={() => refreshListings()}
         />
       )}
     </div>

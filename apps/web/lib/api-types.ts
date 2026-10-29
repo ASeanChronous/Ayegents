@@ -368,6 +368,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/listings/{listing_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Listing
+         * @description Edit a listing's name/description/category -- the one thing publishing
+         *     a new version (POST .../versions) was never meant to cover, since that
+         *     re-snapshots the *source* agent/flow and has nothing to do with the
+         *     listing's own metadata. Partial: only fields actually present in the
+         *     request body are touched (model_dump(exclude_unset=True)), so passing
+         *     description without name leaves name alone rather than clearing it.
+         */
+        patch: operations["update_listing_workspaces__workspace_id__listings__listing_id__patch"];
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/listings/{listing_id}/unpublish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unpublish Listing
+         * @description Takes a published listing off the public browse (listings.py's
+         *     browse_listings/get_listing both filter status = 'published') without
+         *     touching anything it already installed elsewhere -- an install already
+         *     forked its own independent agent/flow copy at install time, so there's
+         *     nothing live for this to retract. 'archived' (publish_status, already in
+         *     the schema since 0001_init_schema.sql, unused until now) rather than
+         *     deleting the row: install history (installs.listing_id) and existing
+         *     reviews (listing_reviews.listing_id) both still reference it. Publishing
+         *     a new version (already-existing endpoint, no change needed) re-lists it,
+         *     since that endpoint sets status = 'published' unconditionally regardless
+         *     of what it was before.
+         */
+        post: operations["unpublish_listing_workspaces__workspace_id__listings__listing_id__unpublish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspace_id}/listings/{listing_id}/versions": {
         parameters: {
             query?: never;
@@ -752,6 +807,15 @@ export interface components {
             source_flow_id?: string | null;
             /** Name */
             name: string;
+            /** Description */
+            description?: string | null;
+            /** Category */
+            category?: string | null;
+        };
+        /** ListingUpdate */
+        ListingUpdate: {
+            /** Name */
+            name?: string | null;
             /** Description */
             description?: string | null;
             /** Category */
@@ -2113,6 +2177,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["app__routers__marketplace__ListingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_listing_workspaces__workspace_id__listings__listing_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                listing_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ListingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceListingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpublish_listing_workspaces__workspace_id__listings__listing_id__unpublish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                listing_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceListingOut"];
                 };
             };
             /** @description Validation Error */
