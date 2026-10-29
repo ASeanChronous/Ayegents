@@ -71,6 +71,12 @@ export default function FlowCanvasPage() {
     workspaceId ? `/workspaces/${workspaceId}/agents` : null,
     () => unwrap(api.GET("/workspaces/{workspace_id}/agents", { params: { path: { workspace_id: workspaceId! } } }))
   );
+  // For the Triggers drawer's agent_event source picker -- other flows in
+  // this workspace an agent_event trigger could name as its source.
+  const { data: flows } = useSWR(
+    workspaceId ? `/workspaces/${workspaceId}/flows` : null,
+    () => unwrap(api.GET("/workspaces/{workspace_id}/flows", { params: { path: { workspace_id: workspaceId! } } }))
+  );
   const { data: tools } = useSWR(
     workspaceId ? `/workspaces/${workspaceId}/tools` : null,
     () => unwrap(api.GET("/workspaces/{workspace_id}/tools", { params: { path: { workspace_id: workspaceId! } } }))
@@ -492,6 +498,8 @@ export default function FlowCanvasPage() {
         onClose={() => setTriggersOpen(false)}
         workspaceId={workspaceId}
         flowId={flowId}
+        agents={agents}
+        flows={flows}
       />
       <TestRunDrawer
         open={testRunOpen}

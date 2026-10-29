@@ -19,6 +19,7 @@ from uuid import UUID
 import asyncpg
 from anthropic import AsyncAnthropic
 
+from orchestrator_app.agent_event import fire_agent_event_triggers
 from orchestrator_app.config import settings
 from orchestrator_app.model_router import compute_cost_usd, resolve_model_id
 from orchestrator_app.notify import notify_run
@@ -69,6 +70,9 @@ async def run_single_agent(conn: asyncpg.Connection, run_id: UUID) -> None:
         output.get("error") if status == "failed" else None,
     )
     await notify_run(conn, run_id)
+    await fire_agent_event_triggers(
+        conn, source_agent_id=run["agent_id"], status=status, output=output
+    )
 
 
 async def run_agent_as_tool(

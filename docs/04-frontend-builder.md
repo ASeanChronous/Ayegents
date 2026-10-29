@@ -485,9 +485,10 @@ NodeInspector's trigger panel text now says as much instead of the old "later ph
 
 - **`services/api/app/routers/triggers.py`** — authenticated CRUD under
   `/workspaces/{workspace_id}/flows/{flow_id}/triggers`. `kind` is `manual` | `webhook` |
-  `schedule` (the schema's fourth kind, `agent_event`, is still out of scope — nothing in
-  this open item named it, and it needs flow-to-flow wiring this project hasn't designed).
-  A webhook's secret is always server-generated (`secrets.token_urlsafe(32)`), never
+  `schedule` at this point in the build (the schema's fourth kind, `agent_event`, was still
+  out of scope here — nothing in this open item named it, and it needed flow-to-flow wiring
+  this project hadn't designed yet; closed in a later pass, see "agent_event trigger kind"
+  below). A webhook's secret is always server-generated (`secrets.token_urlsafe(32)`), never
   caller-supplied. A schedule's cron expression is validated with `croniter.is_valid` at
   both create and update time, rejected with a 400 before it ever reaches the scheduler.
 - **`services/api/app/routers/webhooks.py`** — the public side, `POST /webhooks/{trigger_id}`,
@@ -536,6 +537,84 @@ plain-language message in the drawer instead of a console-only exception.
 
 `tsc --noEmit`, `npm run build` (11 routes, unchanged — Triggers is a drawer on the
 existing flow page, not a new route), and `npm test` (9 tests, unaffected) all clean.
+
+### agent_event trigger kind
+
+**Done.** Closes the gap the webhook/schedule increment above left open: `agent_event`, the
+schema's fourth `trigger_kind`, for a flow that starts automatically when another agent's
+or flow's *top-level* run reaches a given terminal status — the "flow-to-flow wiring" that
+increment explicitly deferred for not being designed yet.
+
+Design:
+- `triggers.config` for an `agent_event` trigger holds exactly one of `source_agent_id` or
+  `source_flow_id` (whichever kind of thing it watches), plus `on_status`
+  (`succeeded` | `failed` | `budget_exceeded`, default `succeeded`) — same "everything
+  trigger-specific lives in `config` jsonb" convention webhook's `secret` and schedule's
+  `cron` already use, no new table.
+- Both the source and `on_status` are resolved and validated at create time
+  (`triggers.py`'s `_resolve_agent_event_config`), not taken on faith: the source must
+  belong to the *same workspace* as the trigger's own flow (404 otherwise — the same
+  cross-tenant gap class the agent-as-tool increment found and fixed for `sub_agent_ids`),
+  and a flow naming itself as its own source is rejected outright (400, "a flow can't
+  trigger itself") — the one immediate cycle that's cheap to catch here, same spirit as the
+  agent-as-tool self-reference check. A longer cycle (flow A's trigger fires B, B's fires
+  A) is **not** detected — a deliberate, documented scope cut
+  (`orchestrator_app/agent_event.py`'s own docstring has the full reasoning), same category
+  as flow_executor.py's own "no checkpointing, tiny condition language" notes: real, left
+  for later, not an oversight. It would show up immediately as runs piling up in the Runs
+  list, and the existing "disable this trigger" lever already handles it once noticed.
+- The source (`source_agent_id`/`source_flow_id`) is immutable once set — `PATCH` only
+  allows changing `on_status` (and `enabled`, as before). Swapping the source is a big
+  enough semantic change that delete-and-recreate is clearer, same reasoning the existing
+  webhook secret's immutability already uses.
+- `services/orchestrator/orchestrator_app/agent_event.py` (new) — `fire_agent_event_triggers`,
+  the firing side (`triggers.py` only builds/validates the row, same webhooks.py/scheduler.py
+  split the other two kinds already have). Matches enabled `agent_event` triggers whose
+  `config.source_agent_id`/`source_flow_id` and `on_status` match the run that just
+  finished, and for each one inserts a new `runs` row (`trigger_id` set, same as a webhook
+  or schedule firing) plus a `run_queue` row, and bumps `last_fired_at` — identical
+  mechanics to `scheduler.py`'s `fire_due_triggers`, just event-driven instead of polled.
+  The new run's `input` is the source run's `output` taken wholesale, the same
+  "predecessor's output becomes the next thing's input" convention a flow's own tool-node
+  `input_map` already follows (`flow_executor.py`'s `_resolve_input_dict`) — not a new
+  convention invented for this.
+- Called from exactly two places, both already finalizing a run's terminal status:
+  `executor.py`'s `run_single_agent` (source_agent_id = the run's `agent_id`) and
+  `flow_executor.py`'s `run_flow`, on both its success *and* failure paths
+  (source_flow_id = the run's `flow_id`). Deliberately **not** called from
+  `run_agent_as_tool` — a sub-agent delegation reuses the parent run's row rather than
+  writing its own `runs.status` (executor.py's own docstring), so it was already naturally
+  excluded without a special case: only a *published agent's own top-level run* can be an
+  `agent_event` source, never one of its sub-agent calls.
+- Frontend (`TriggersDrawer.tsx`): a third "Agent/flow event" tab alongside Webhook/Schedule
+  in the add-trigger form, offered only when the flow page has agents and/or other flows to
+  pick from (`agents`/`flows`, newly passed down from `flows/[id]/page.tsx`, which already
+  loaded `agents` for the canvas and now also loads `flows` for this). A source-type toggle
+  (an agent vs. another flow) picks which half of the union the select below it fills in;
+  "another flow" excludes the current flow from its own list client-side too, so the form
+  never even offers the choice the backend would reject. An existing trigger's row shows
+  "When **\<name\>** (agent/flow) runs and `on_status` — last fired \<time\>/never fired
+  yet," resolving the id to a name via the same `agents`/`flows` lists.
+
+Verified against the real Docker Postgres + API + orchestrator setup. `curl`: created a
+valid `agent_event` trigger, confirmed the self-reference rejection (400) and the
+cross-workspace rejection (404), and confirmed sending both/neither of
+`source_agent_id`/`source_flow_id` is rejected (422, pydantic's own `model_validator`).
+Started the real orchestrator (Anthropic client mocked with known usage) against a
+published source agent and started a run of it through the API — confirmed in Postgres
+that the agent's run succeeding automatically inserted a *second* `runs` row for the
+downstream flow, with the right `trigger_id` and `input` set to the source run's exact
+output, that this new run executed and itself succeeded, and that the trigger's
+`last_fired_at` was stamped. Then disabled the trigger and started a second source-agent
+run — confirmed no second flow run was created. Confirmed a trigger that has already fired
+can't be deleted (409, "disable it instead"), same as webhook/schedule. Finally, in a real
+browser: created an agent and a flow in the same workspace, opened the flow's Triggers
+drawer, confirmed the "Agent/flow event" tab appears, filled in the form (source agent +
+`on_status`), submitted, and confirmed the new trigger renders with the resolved agent
+name and status in the list — screenshotted for the record.
+
+`tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests,
+unaffected) all clean.
 
 ### Marketplace flow listings
 

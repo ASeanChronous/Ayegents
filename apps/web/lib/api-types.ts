@@ -1079,9 +1079,19 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "manual" | "webhook" | "schedule";
+            kind: "manual" | "webhook" | "schedule" | "agent_event";
             /** Cron */
             cron?: string | null;
+            /** Source Agent Id */
+            source_agent_id?: string | null;
+            /** Source Flow Id */
+            source_flow_id?: string | null;
+            /**
+             * On Status
+             * @default succeeded
+             * @enum {string}
+             */
+            on_status: "succeeded" | "failed" | "budget_exceeded";
         };
         /** TriggerOut */
         TriggerOut: {
@@ -1094,7 +1104,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "manual" | "webhook" | "schedule";
+            kind: "manual" | "webhook" | "schedule" | "agent_event";
             /** Config */
             config: {
                 [key: string]: unknown;
@@ -1115,6 +1125,8 @@ export interface components {
             enabled?: boolean | null;
             /** Cron */
             cron?: string | null;
+            /** On Status */
+            on_status?: ("succeeded" | "failed" | "budget_exceeded") | null;
         };
         /** ValidationError */
         ValidationError: {

@@ -13,7 +13,7 @@ import { api, unwrap, ApiError } from "@/lib/api";
 import { FormDrawer } from "@/components/FormDrawer";
 import { Badge } from "@/components/Badge";
 
-type TriggerKind = "manual" | "webhook" | "schedule";
+type TriggerKind = "manual" | "webhook" | "schedule" | "agent_event";
 
 type Trigger = {
   id: string;
@@ -24,11 +24,17 @@ type Trigger = {
   created_at: string;
 };
 
-const KIND_TONE: Record<TriggerKind, "gray" | "blue" | "green"> = {
+type Agent = { id: string; name: string };
+type Flow = { id: string; name: string };
+
+const KIND_TONE: Record<TriggerKind, "gray" | "blue" | "green" | "yellow"> = {
   manual: "gray",
   webhook: "blue",
   schedule: "green",
+  agent_event: "yellow",
 };
+
+const ON_STATUS_OPTIONS = ["succeeded", "failed", "budget_exceeded"] as const;
 
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -37,11 +43,20 @@ export function TriggersDrawer({
   onClose,
   workspaceId,
   flowId,
+  agents,
+  flows,
 }: {
   open: boolean;
   onClose: () => void;
   workspaceId: string;
   flowId: string;
+  // For the agent_event source picker -- other agents/flows in this same
+  // workspace that can be named as the upstream thing whose run starts this
+  // one. Optional so callers that don't already have these lists loaded
+  // (none today, but nothing requires it) just don't get that trigger kind
+  // offered, rather than this component fetching its own duplicate copies.
+  agents?: Agent[];
+  flows?: Flow[];
 }) {
   const { data: triggers, mutate } = useSWR(
     open ? `/workspaces/${workspaceId}/flows/${flowId}/triggers` : null,
@@ -54,23 +69,50 @@ export function TriggersDrawer({
   );
 
   const [adding, setAdding] = useState(false);
-  const [addKind, setAddKind] = useState<"webhook" | "schedule">("webhook");
+  const [addKind, setAddKind] = useState<"webhook" | "schedule" | "agent_event">("webhook");
   const [cron, setCron] = useState("0 * * * *");
+  // agent_event fields -- sourceType picks which half of the union
+  // (source_agent_id vs. source_flow_id) the form is filling in.
+  const [sourceType, setSourceType] = useState<"agent" | "flow">("agent");
+  const [sourceId, setSourceId] = useState("");
+  const [onStatus, setOnStatus] = useState<(typeof ON_STATUS_OPTIONS)[number]>("succeeded");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Other flows this flow could depend on -- excludes itself, since the API
+  // rejects a flow naming its own completion as its trigger (a 1-step
+  // infinite loop) and there's no point letting the form offer a choice
+  // the backend will just reject.
+  const otherFlows = (flows ?? []).filter((f) => f.id !== flowId);
 
   async function handleAdd(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
+      // on_status is only meaningful for agent_event, but the generated
+      // client type marks it required (it has a server-side default, which
+      // openapi-typescript treats as "always present," not "optional") --
+      // sending the UI's current value for every kind is harmless, since
+      // the backend only ever reads it on the agent_event branch.
+      const body =
+        addKind === "schedule"
+          ? { kind: "schedule" as const, cron, on_status: onStatus }
+          : addKind === "agent_event"
+            ? {
+                kind: "agent_event" as const,
+                on_status: onStatus,
+                ...(sourceType === "agent" ? { source_agent_id: sourceId } : { source_flow_id: sourceId }),
+              }
+            : { kind: "webhook" as const, on_status: onStatus };
       await unwrap(
         api.POST("/workspaces/{workspace_id}/flows/{flow_id}/triggers", {
           params: { path: { workspace_id: workspaceId, flow_id: flowId } },
-          body: addKind === "schedule" ? { kind: "schedule", cron } : { kind: "webhook" },
+          body,
         })
       );
       setAdding(false);
+      setSourceId("");
       await mutate();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to create trigger");
@@ -121,19 +163,26 @@ export function TriggersDrawer({
     <FormDrawer open={open} onClose={onClose} title="Triggers">
       <div className="space-y-4">
         <p className="text-sm text-gray-500">
-          Starts this flow without opening the app — a webhook POST or a cron schedule, on top of starting it
-          manually from the Runs page.
+          Starts this flow without opening the app — a webhook POST, a cron schedule, or another agent/flow's run
+          finishing, on top of starting it manually from the Runs page.
         </p>
         {actionError && <p className="text-sm text-red-600">{actionError}</p>}
 
         {!triggers ? (
           <p className="text-sm text-gray-500">Loading…</p>
         ) : triggers.length === 0 ? (
-          <p className="text-sm text-gray-500">No webhook or schedule triggers yet.</p>
+          <p className="text-sm text-gray-500">No triggers yet.</p>
         ) : (
           <ul className="space-y-3">
             {triggers.map((t) => (
-              <TriggerRow key={t.id} trigger={t} onToggle={() => handleToggle(t)} onDelete={() => handleDelete(t.id)} />
+              <TriggerRow
+                key={t.id}
+                trigger={t}
+                agents={agents}
+                flows={flows}
+                onToggle={() => handleToggle(t)}
+                onDelete={() => handleDelete(t.id)}
+              />
             ))}
           </ul>
         )}
@@ -159,6 +208,19 @@ export function TriggersDrawer({
               >
                 Schedule
               </button>
+              {(agents || otherFlows.length > 0) && (
+                <button
+                  type="button"
+                  onClick={() => setAddKind("agent_event")}
+                  className={`flex-1 rounded-md border px-2 py-1 ${
+                    addKind === "agent_event"
+                      ? "border-gray-900 bg-gray-900 text-white"
+                      : "border-gray-300 text-gray-700"
+                  }`}
+                >
+                  Agent/flow event
+                </button>
+              )}
             </div>
             {addKind === "schedule" && (
               <div>
@@ -173,6 +235,81 @@ export function TriggersDrawer({
                   className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm focus:border-gray-500 focus:outline-none"
                 />
                 <p className="mt-1 text-xs text-gray-400">Standard 5-field cron — minute hour day-of-month month day-of-week.</p>
+              </div>
+            )}
+            {addKind === "agent_event" && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">
+                  Starts this flow automatically when another agent's or flow's run finishes, in this same
+                  workspace.
+                </p>
+                <div>
+                  <span className="block text-sm font-medium text-gray-700">Source</span>
+                  <div className="mt-1 flex gap-2 text-sm">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSourceType("agent");
+                        setSourceId("");
+                      }}
+                      className={`flex-1 rounded-md border px-2 py-1 ${
+                        sourceType === "agent" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-700"
+                      }`}
+                    >
+                      An agent
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSourceType("flow");
+                        setSourceId("");
+                      }}
+                      className={`flex-1 rounded-md border px-2 py-1 ${
+                        sourceType === "flow" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-700"
+                      }`}
+                    >
+                      Another flow
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700" htmlFor="trigger-source">
+                    {sourceType === "agent" ? "Agent" : "Flow"}
+                  </label>
+                  <select
+                    id="trigger-source"
+                    required
+                    value={sourceId}
+                    onChange={(e) => setSourceId(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+                  >
+                    <option value="" disabled>
+                      Choose {sourceType === "agent" ? "an agent" : "a flow"}…
+                    </option>
+                    {(sourceType === "agent" ? agents ?? [] : otherFlows).map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700" htmlFor="trigger-on-status">
+                    When it
+                  </label>
+                  <select
+                    id="trigger-on-status"
+                    value={onStatus}
+                    onChange={(e) => setOnStatus(e.target.value as (typeof ON_STATUS_OPTIONS)[number])}
+                    className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
+                  >
+                    {ON_STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             )}
             {error && <p className="text-sm text-red-600">{error}</p>}
@@ -206,11 +343,31 @@ export function TriggersDrawer({
   );
 }
 
-function TriggerRow({ trigger, onToggle, onDelete }: { trigger: Trigger; onToggle: () => void; onDelete: () => void }) {
+function TriggerRow({
+  trigger,
+  agents,
+  flows,
+  onToggle,
+  onDelete,
+}: {
+  trigger: Trigger;
+  agents?: Agent[];
+  flows?: Flow[];
+  onToggle: () => void;
+  onDelete: () => void;
+}) {
   const [revealSecret, setRevealSecret] = useState(false);
   const webhookUrl = `${apiBaseUrl}/webhooks/${trigger.id}`;
   const secret = typeof trigger.config.secret === "string" ? trigger.config.secret : null;
   const cron = typeof trigger.config.cron === "string" ? trigger.config.cron : null;
+  const sourceAgentId = typeof trigger.config.source_agent_id === "string" ? trigger.config.source_agent_id : null;
+  const sourceFlowId = typeof trigger.config.source_flow_id === "string" ? trigger.config.source_flow_id : null;
+  const onStatus = typeof trigger.config.on_status === "string" ? trigger.config.on_status : null;
+  const sourceName = sourceAgentId
+    ? agents?.find((a) => a.id === sourceAgentId)?.name ?? sourceAgentId.slice(0, 8)
+    : sourceFlowId
+      ? flows?.find((f) => f.id === sourceFlowId)?.name ?? sourceFlowId.slice(0, 8)
+      : null;
 
   return (
     <li className="space-y-2 rounded-md border border-gray-200 p-3">
@@ -251,6 +408,14 @@ function TriggerRow({ trigger, onToggle, onDelete }: { trigger: Trigger; onToggl
         </div>
       )}
       {trigger.kind === "manual" && <p className="text-xs text-gray-500">Start it from the Runs page.</p>}
+      {trigger.kind === "agent_event" && (
+        <div className="text-xs text-gray-500">
+          When <span className="font-medium text-gray-700">{sourceName ?? "—"}</span>{" "}
+          {sourceAgentId ? "(agent)" : "(flow)"} runs and <code className="rounded bg-gray-100 px-1 py-0.5">{onStatus}</code>
+          {" — "}
+          {trigger.last_fired_at ? `last fired ${new Date(trigger.last_fired_at).toLocaleString()}` : "never fired yet"}
+        </div>
+      )}
     </li>
   );
 }

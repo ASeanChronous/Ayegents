@@ -28,6 +28,7 @@ from uuid import UUID
 import asyncpg
 from langgraph.graph import END, START, StateGraph
 
+from orchestrator_app.agent_event import fire_agent_event_triggers
 from orchestrator_app.executor import (
     _execute_agent_loop,
     _load_current_version,
@@ -120,6 +121,12 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
                 total_tokens,
             )
             await notify_run(conn, run_id)
+            await fire_agent_event_triggers(
+                conn,
+                source_flow_id=run["flow_id"],
+                status="succeeded",
+                output={"node_outputs": final_state["node_outputs"]},
+            )
     except Exception as exc:  # noqa: BLE001 — surfaced into the run row, not swallowed
         async with pool.acquire() as conn:
             await conn.execute(
@@ -132,6 +139,9 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
                 str(exc),
             )
             await notify_run(conn, run_id)
+            await fire_agent_event_triggers(
+                conn, source_flow_id=run["flow_id"], status="failed", output=None
+            )
 
 
 async def execute_flow(
