@@ -566,9 +566,10 @@ Design:
   agent-as-tool self-reference check. A longer cycle (flow A's trigger fires B, B's fires
   A) is **not** detected — a deliberate, documented scope cut
   (`orchestrator_app/agent_event.py`'s own docstring has the full reasoning), same category
-  as flow_executor.py's own "no checkpointing, tiny condition language" notes: real, left
-  for later, not an oversight. It would show up immediately as runs piling up in the Runs
-  list, and the existing "disable this trigger" lever already handles it once noticed.
+  flow_executor.py's "tiny condition language"/"no checkpointing" notes used to be before
+  both were closed in later passes (below): real, left for later, not an oversight. It
+  would show up immediately as runs piling up in the Runs list, and the existing "disable
+  this trigger" lever already handles it once noticed.
 - The source (`source_agent_id`/`source_flow_id`) is immutable once set — `PATCH` only
   allows changing `on_status` (and `enabled`, as before). Swapping the source is a big
   enough semantic change that delete-and-recreate is clearer, same reasoning the existing
@@ -652,8 +653,8 @@ not a breaking grammar change.
   output** — not relaxed by this pass, called out explicitly in `_eval_condition`'s own
   docstring as staying that way. A condition this small is meant to pick a branch, not
   compute one; real logic belongs in an upstream agent or tool node. (The module's other
-  scope cut, no checkpointing, is also unchanged — still open, still exactly as described
-  in the module docstring.)
+  scope cut at the time, no checkpointing, was still open when this pass landed — closed in
+  a later pass, "Flow checkpointing" below.)
 - Frontend (`NodeInspector.tsx`'s `EdgePanel`): the three-control editor (negate toggle,
   key-path input) gained a fourth control, a "Compare" select (`is truthy` plus the six
   operators), and a value input that only appears once an operator other than "is truthy"
@@ -812,3 +813,83 @@ Runs list labeled "(test run, unsaved spec)."
 
 `tsc --noEmit`, `npm run build` (11 routes, unchanged — Test run is a drawer, not a new
 route), and `npm test` (9 tests, unaffected) all clean.
+
+### Flow checkpointing
+
+**Done.** Closes `flow_executor.py`'s last remaining scope cut: a flow run used to compile
+and execute as one in-memory `ainvoke` call with nothing persisted along the way, so an
+orchestrator crash mid-flow left the run stuck at `status = 'running'` forever — lost, not
+just delayed. Backend-only; no frontend changes (the gap was invisible to the UI either way
+— a stuck run just never updated — so there's nothing new to render, only a run that now
+actually finishes after a restart instead of hanging).
+
+Design:
+- LangGraph's own `AsyncPostgresSaver` (`langgraph-checkpoint-postgres`, built on `psycopg3`
+  — a second Postgres driver in the orchestrator alongside `asyncpg`, since that's what the
+  library requires) is the checkpointer, keyed on `run_id` as LangGraph's `thread_id`. It
+  owns and migrates its own tables (`checkpointer.setup()`, called once at orchestrator
+  startup — idempotent, no hand-written SQL migration the way every other table gets one,
+  same reasoning the builtin-tools seed migrations don't try to own Anthropic's own schema).
+- `execute_flow` (`flow_executor.py`) compiles every graph with that checkpointer and always
+  checks `compiled.aget_state(config)` before invoking: an empty snapshot (every run's first
+  attempt, overwhelmingly the common case) starts normally from the trigger; a non-empty one
+  means a previous attempt got partway through before the process died, so
+  `ainvoke(None, config)` resumes from the last completed super-step — LangGraph skips
+  re-running already-finished nodes, reading their output straight from the checkpoint.
+- `runs.flow_version_id` (a column that already existed but was never written — every flow
+  run always re-resolved "latest version" fresh) is now pinned the first time a run resolves
+  it, so a resume after a restart rebuilds the *exact* graph that was running, even if
+  someone published a newer flow version in the meantime. Without this, "latest" could mean
+  a different spec on resume than it meant when the run started, which LangGraph has no way
+  to detect or reconcile — the checkpoint's node ids would silently stop matching the graph.
+- `main.py` gained `recover_interrupted_flows`, run once at startup before either poll loop
+  starts: finds every `status = 'running'` run with `flow_id` set (single-agent runs are
+  deliberately excluded — `_execute_agent_loop` has no checkpointing mechanism of its own,
+  nothing to resume into, so they're left exactly as before, a separate and still-open gap)
+  and re-enters `run_flow` directly with `resuming=True`, bypassing `run_queue` entirely —
+  there's nothing left to claim, since the original claim's `locked_at` was set by whichever
+  process crashed and nothing ever clears a lock except normal completion. `resuming=True`
+  only skips re-stamping `started_at`/re-notifying "running" (already true); the checkpoint
+  check inside `execute_flow` is what actually decides whether to resume or start over, and
+  is exercised identically whether `run_flow` was entered by the normal queue path or by
+  recovery. The stale `run_queue` row gets cleaned up the same way `process_run`'s own
+  normal-completion path always has.
+- `total_tokens` is now computed as a SQL `sum` over `run_steps` (`run_flow`'s own success/
+  failure updates), the same pattern `total_cost_usd` already used — not threaded through
+  `execute_flow`'s return value as a running Python counter anymore. That counter would have
+  silently undercounted a resumed run's tokens, since a resumed node_fn call for an
+  already-completed node never re-executes to re-add its tokens to the count. As a side
+  effect this also fixes a separate, previously-noted gap: the failure path never set
+  `total_tokens` at all before this pass (only the success path did) — now both do, for free,
+  since neither needs special-casing once the value comes from a query instead of a return.
+- Explicitly **not** attempted: detecting or reconciling a flow spec that changed in a way
+  that's incompatible with an in-flight checkpoint (e.g. a node referenced by the checkpoint
+  was deleted from the graph between the crash and the restart) — `runs.flow_version_id`
+  pinning prevents the common case (a newer version simply existing), but a edited-in-place
+  `draft_spec` dry-run with no version history at all has no such protection beyond "the
+  spec is exactly what's stored on the run row already." A genuinely incompatible resume
+  would surface as a LangGraph error on `ainvoke`, caught by `run_flow`'s existing
+  try/except and turned into a normal `failed` run with that error — not silently wrong, but
+  also not specifically handled.
+
+Verified against the real Docker Postgres + API + orchestrator stack, including a real
+simulated crash — not just a raised exception, an actual `docker kill -9` of the
+orchestrator process mid-flow. Built a two-agent sequential flow (trigger → agentA →
+agentB), started a run with agentB's mocked response made to sleep for 30s; confirmed in
+Postgres that agentA's `run_steps` row had already committed and the run was `running`;
+then hard-killed the orchestrator container while agentB's call was still "in flight" and
+confirmed via `docker ps` it was gone and via Postgres that the run was left `running` with
+exactly one `run_steps` row, a locked `run_queue` row, and real checkpoint rows already
+present for that `thread_id`. Restarted a fresh orchestrator process (a new mock that
+deliberately raises if agentA's prompt is invoked again, to make a checkpoint-not-honored
+regression fail loudly rather than silently) and confirmed in the log that
+`recover_interrupted_flows` found and resumed the stuck run *before* the normal poll loops
+even started, and in Postgres that the run finished `succeeded` with both agents' output
+present, exactly two `run_steps` rows total (no duplicate for agentA), `total_tokens`
+correctly summed across the crash boundary, and the stale `run_queue` row gone. Then
+confirmed a completely ordinary, uninterrupted flow run through a third fresh orchestrator
+process still works unchanged, and that single-agent runs are unaffected and still complete
+normally alongside the checkpointed flow path.
+
+`python3 -m py_compile` clean on every changed file; no frontend changes, so no
+`tsc`/`build`/`test` pass was needed for this one.

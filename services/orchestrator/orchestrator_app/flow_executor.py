@@ -9,10 +9,17 @@ bare tool call, not wrapped in a model loop), 'conditional'/'merge'
 _eval_condition and LangGraph's default "wait for every predecessor" join,
 not on these nodes themselves).
 
-One deliberate scope cut remains, called out in docs/01-architecture.md's roadmap as later
-work, not an oversight: no checkpointing. A flow run compiles and executes as one in-memory
-`ainvoke` call. If the orchestrator process dies mid-flow, the run is lost — same as every
-other run in this scaffold, not a flow-specific gap.
+A flow run is checkpointed to Postgres (via a `BaseCheckpointSaver` the caller supplies —
+`main.py` owns the actual `AsyncPostgresSaver` instance and its connection pool, this module
+just compiles every graph with whichever one it's handed) keyed on `run_id` as the LangGraph
+`thread_id`. `execute_flow` always checks for an existing checkpoint before invoking: none
+(the normal case, every run's first attempt) means start from the trigger with the flow's
+input; one found means a prior attempt got partway through before the orchestrator died, so
+`ainvoke(None, ...)` resumes from the last completed super-step instead of re-running
+already-finished nodes. `main.py`'s startup recovery pass is what actually re-invokes a
+stuck `status = 'running'` flow run after a restart — this module doesn't poll or recover
+anything on its own, same separation `webhooks.py`/`scheduler.py` have from their own firing
+logic. See `main.py`'s own docstring for the recovery pass and its known limits.
 
 The condition language ("<node_id>.output.<key...>", optionally prefixed "not ", optionally
 followed by a comparison) can't reference anything but one predecessor's output and has no
@@ -28,6 +35,7 @@ from typing import Annotated, Any, TypedDict
 from uuid import UUID
 
 import asyncpg
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
 from orchestrator_app.agent_event import fire_agent_event_triggers
@@ -52,14 +60,18 @@ class FlowState(TypedDict):
     node_outputs: Annotated[dict[str, Any], operator.or_]
 
 
-async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
+async def run_flow(
+    pool: asyncpg.Pool, run_id: UUID, checkpointer: BaseCheckpointSaver, *, resuming: bool = False
+) -> None:
     async with pool.acquire() as conn:
         run = await conn.fetchrow("select * from runs where id = $1", run_id)
         if run["draft_spec"] is not None:
             # A true draft dry-run (docs/04-frontend-builder.md §10): the
             # canvas's own nodes/edges, handed straight to execute_flow below
             # exactly as the API received them -- never written to
-            # flow_versions, so there's nothing to look up here at all.
+            # flow_versions, so there's nothing to look up here at all. Also
+            # never needs the "pin the resolved version" treatment below --
+            # the spec itself is already pinned, on the run row.
             spec = run["draft_spec"]
         elif run["flow_version_id"]:
             flow_version = await conn.fetchrow(
@@ -72,6 +84,18 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
                 run["flow_id"],
             )
             spec = flow_version["spec"] if flow_version else None
+            if flow_version is not None:
+                # Pin the version this run actually resolved to "latest" as
+                # onto the run itself -- "latest" has to mean "latest at the
+                # moment this run started," not "latest whenever we happen to
+                # look." Without this, a flow run interrupted mid-flight
+                # (orchestrator restart) and resumed after someone published
+                # a newer version in between would rebuild a *different*
+                # graph than the one the checkpoint was written against,
+                # which LangGraph has no way to detect or reconcile.
+                await conn.execute(
+                    "update runs set flow_version_id = $2 where id = $1", run_id, flow_version["id"]
+                )
 
         if spec is None:
             await conn.execute(
@@ -93,18 +117,20 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
             run["workspace_id"],
         )
 
-        await conn.execute(
-            "update runs set status = 'running', started_at = now() where id = $1", run_id
-        )
-        await notify_run(conn, run_id)
+        if not resuming:
+            await conn.execute(
+                "update runs set status = 'running', started_at = now() where id = $1", run_id
+            )
+            await notify_run(conn, run_id)
 
     try:
         # execute_flow acquires its own connection per node below — a flow with
         # concurrent (fan-out) branches cannot share one connection, since a
         # single asyncpg connection can't run two queries at once. The conn
         # released above is free again by the time this starts.
-        final_state, total_tokens = await execute_flow(
+        final_state = await execute_flow(
             pool,
+            checkpointer=checkpointer,
             run_id=run_id,
             workspace_id=run["workspace_id"],
             spec=spec,
@@ -114,13 +140,13 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                update runs set status = 'succeeded', output = $2, total_tokens = $3, finished_at = now(),
+                update runs set status = 'succeeded', output = $2, finished_at = now(),
+                    total_tokens = coalesce((select sum(tokens_input + tokens_output) from run_steps where run_id = $1), 0),
                     total_cost_usd = coalesce((select sum(cost_usd) from run_steps where run_id = $1), 0)
                 where id = $1
                 """,
                 run_id,
                 {"node_outputs": final_state["node_outputs"]},
-                total_tokens,
             )
             await notify_run(conn, run_id)
             await fire_agent_event_triggers(
@@ -134,6 +160,7 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
             await conn.execute(
                 """
                 update runs set status = 'failed', error = $2, finished_at = now(),
+                    total_tokens = coalesce((select sum(tokens_input + tokens_output) from run_steps where run_id = $1), 0),
                     total_cost_usd = coalesce((select sum(cost_usd) from run_steps where run_id = $1), 0)
                 where id = $1
                 """,
@@ -149,12 +176,13 @@ async def run_flow(pool: asyncpg.Pool, run_id: UUID) -> None:
 async def execute_flow(
     pool: asyncpg.Pool,
     *,
+    checkpointer: BaseCheckpointSaver,
     run_id: UUID,
     workspace_id: UUID,
     spec: dict,
     initial_input: dict,
     max_steps_per_agent_node: int,
-) -> tuple[FlowState, int]:
+) -> FlowState:
     nodes = {n["id"]: n for n in spec.get("nodes", [])}
     edges = spec.get("edges", [])
     if not nodes:
@@ -167,7 +195,6 @@ async def execute_flow(
         )
     trigger_id = trigger_ids[0]
 
-    tokens_counter = {"total": 0}
     graph = StateGraph(FlowState)
     for node_id, node in nodes.items():
         graph.add_node(
@@ -179,7 +206,6 @@ async def execute_flow(
                 run_id=run_id,
                 initial_input=initial_input,
                 max_steps=max_steps_per_agent_node,
-                tokens_counter=tokens_counter,
             ),
         )
 
@@ -201,9 +227,26 @@ async def execute_flow(
         if node_id not in outgoing:
             graph.add_edge(node_id, END)
 
-    compiled = graph.compile()
-    final_state = await compiled.ainvoke({"node_outputs": {}})
-    return final_state, tokens_counter["total"]
+    compiled = graph.compile(checkpointer=checkpointer)
+    # thread_id = run_id is what makes a crash-and-restart's resume (main.py's
+    # recovery pass) and this run's own checkpoint the same conversation, as
+    # far as LangGraph is concerned — every invocation of this run, first or
+    # resumed, must use this exact config for the checkpointer to agree.
+    config = {"configurable": {"thread_id": str(run_id)}}
+    # A thread with no prior checkpoint (every run's first attempt; the
+    # overwhelming majority of the time) has an empty state snapshot — start
+    # normally. One *with* a checkpoint means a previous attempt got partway
+    # through before the orchestrator died (main.py's recovery pass re-enters
+    # here with the same run_id after a restart): ainvoke(None, ...) resumes
+    # from the last completed super-step instead of re-running finished nodes
+    # (whose run_steps rows, and hence tokens/cost, already exist from before
+    # the crash -- re-running them would double both).
+    existing_state = await compiled.aget_state(config)
+    if existing_state.values:
+        final_state = await compiled.ainvoke(None, config)
+    else:
+        final_state = await compiled.ainvoke({"node_outputs": {}}, config)
+    return final_state
 
 
 def _make_router(source_edges: list[dict]):
@@ -314,7 +357,7 @@ def _eval_condition(condition: str, state: FlowState) -> bool:
     return not result if negate else result
 
 
-def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps, tokens_counter):
+def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps):
     node_type = node["type"]
 
     if node_type == "trigger":
@@ -339,7 +382,7 @@ def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps,
                 if agent_version is None:
                     raise FlowExecutionError(f"node {node['id']!r}: agent {agent_id} has no version")
                 message = _resolve_input_text(node, state, initial_input)
-                status, output, tokens = await _execute_agent_loop(
+                status, output, _tokens = await _execute_agent_loop(
                     conn,
                     run_id=run_id,
                     workspace_id=workspace_id,
@@ -349,7 +392,12 @@ def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps,
                     depth=0,
                     node_id=node["id"],
                 )
-            tokens_counter["total"] += tokens
+            # Not accumulated here -- run_flow computes the run's total_tokens
+            # via a SQL sum over run_steps instead (same reason total_cost_usd
+            # already does), since a resumed node_fn call for an *already
+            # completed* node never re-executes (LangGraph skips it, reading
+            # its output from the checkpoint), so a Python-side running total
+            # would silently undercount tokens from before a restart.
             if status != "succeeded":
                 raise FlowExecutionError(f"node {node['id']!r} (agent) did not succeed: {output}")
             return {"node_outputs": {node["id"]: {"output": output}}}

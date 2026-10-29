@@ -11,6 +11,12 @@ dependencies = [
   "e2b-code-interpreter>=1.0",
   "langgraph>=1.0",  # verified against 1.2.16, the current release as of this writing
   "croniter>=2.0",  # computes a schedule trigger's next fire time (scheduler.py)
+  # Postgres-backed checkpointer (flow_executor.py's resume-on-restart support) --
+  # built on psycopg3, not asyncpg, since that's what langgraph-checkpoint-postgres
+  # requires; it owns and migrates its own tables (AsyncPostgresSaver.setup(),
+  # called once at orchestrator startup), so no hand-written SQL migration for them.
+  "langgraph-checkpoint-postgres>=2.0",
+  "psycopg[binary,pool]>=3.1",
 ]
 
 [project.optional-dependencies]
