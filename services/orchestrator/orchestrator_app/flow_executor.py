@@ -9,18 +9,19 @@ bare tool call, not wrapped in a model loop), 'conditional'/'merge'
 _eval_condition and LangGraph's default "wait for every predecessor" join,
 not on these nodes themselves).
 
-Two deliberate scope cuts, both called out in docs/01-architecture.md's
-roadmap as later work, not oversights:
-- Condition language is tiny: "<node_id>.output.<key...>" (optionally
-  prefixed "not "), resolved by dict lookup + truthiness. No comparisons,
-  no arithmetic, no referencing anything but a predecessor's output.
-- No checkpointing: a flow run compiles and executes as one in-memory
-  `ainvoke` call. If the orchestrator process dies mid-flow, the run is
-  lost — same as every other run in this scaffold, not a flow-specific gap.
+One deliberate scope cut remains, called out in docs/01-architecture.md's roadmap as later
+work, not an oversight: no checkpointing. A flow run compiles and executes as one in-memory
+`ainvoke` call. If the orchestrator process dies mid-flow, the run is lost — same as every
+other run in this scaffold, not a flow-specific gap.
+
+The condition language ("<node_id>.output.<key...>", optionally prefixed "not ", optionally
+followed by a comparison) can't reference anything but one predecessor's output and has no
+arithmetic -- see `_eval_condition`'s own docstring for the full grammar and reasoning.
 """
 
 import json
 import operator
+import re
 import time
 from datetime import datetime, timezone
 from typing import Annotated, Any, TypedDict
@@ -219,15 +220,70 @@ def _make_router(source_edges: list[dict]):
     return route
 
 
+_COMPARISON_PATTERN = re.compile(r"^(?P<lhs>\S+)\s+(?P<op>==|!=|>=|<=|>|<)\s+(?P<rhs>.+)$")
+
+_COMPARISON_OPS = {
+    "==": lambda a, b: a == b,
+    "!=": lambda a, b: a != b,
+    ">": lambda a, b: _as_number(a) > _as_number(b),
+    "<": lambda a, b: _as_number(a) < _as_number(b),
+    ">=": lambda a, b: _as_number(a) >= _as_number(b),
+    "<=": lambda a, b: _as_number(a) <= _as_number(b),
+}
+
+
+def _as_number(value: Any) -> float:
+    # bool excluded even though it's technically an int subclass -- "true > 0"
+    # being valid Python is a footgun here, not a feature, for a condition
+    # language users write by hand.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise FlowExecutionError(f"can't compare non-numeric value {value!r} with >, <, >=, or <=")
+    return float(value)
+
+
+def _parse_condition_literal(raw: str) -> Any:
+    """The right-hand side of a comparison. JSON syntax covers numbers,
+    true/false/null, and double-quoted strings; single quotes are also
+    accepted (JSON doesn't allow them) since hand-typing \\" in a form field
+    is awkward. Anything else that isn't valid JSON is taken as a bare,
+    unquoted string -- 'status == approved' works without quoting."""
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
+        return raw[1:-1]
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
 def _eval_condition(condition: str, state: FlowState) -> bool:
+    """Grammar: "[not ]<node_id>.output.<key...>[ <op> <value>]".
+
+    With no `<op> <value>`, the condition is the referenced value's truthiness
+    (the original, still-default behavior). With one, `<op>` is one of
+    ==/!=/>/</>=/<=  and `<value>` is a JSON literal (or a bare unquoted
+    string) compared against the referenced value. `>`/`<`/`>=`/`<=` require
+    both sides to be numbers, or the condition raises rather than silently
+    coercing strings. A leading "not " negates the final result either way.
+
+    Deliberately still can't reference anything but one predecessor's output
+    (no cross-node expressions) and has no arithmetic -- a condition this
+    small is meant to pick a branch, not compute one; an agent or tool node
+    upstream is where real logic belongs.
+    """
     text = condition.strip()
     negate = text.startswith("not ")
     if negate:
         text = text[len("not "):]
-    parts = text.split(".")
+
+    match = _COMPARISON_PATTERN.match(text)
+    lhs_text = match.group("lhs") if match else text
+
+    parts = lhs_text.split(".")
     if len(parts) < 3 or parts[1] != "output":
         raise FlowExecutionError(
-            f"unsupported condition syntax: {condition!r} (expected '<node_id>.output.<key...>')"
+            f"unsupported condition syntax: {condition!r} "
+            "(expected '<node_id>.output.<key...>', optionally followed by '<op> <value>')"
         )
     node_id, _output_literal, *key_path = parts
     value: Any = state["node_outputs"].get(node_id, {}).get("output", {})
@@ -249,7 +305,12 @@ def _eval_condition(condition: str, state: FlowState) -> bool:
             value = parsed
     for key in key_path:
         value = value.get(key) if isinstance(value, dict) else None
-    result = bool(value)
+
+    if match is None:
+        result = bool(value)
+    else:
+        rhs = _parse_condition_literal(match.group("rhs"))
+        result = _COMPARISON_OPS[match.group("op")](value, rhs)
     return not result if negate else result
 
 

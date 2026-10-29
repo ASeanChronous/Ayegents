@@ -118,19 +118,25 @@ enforce it).
 ## 5. Edges and the condition editor
 
 An edge is a drag-to-connect line between two node handles, carrying an optional
-`condition` string. `flow_executor.py`'s grammar for that string is deliberately tiny
-(§ intro of that file): `"<node_id>.output.<key...>"`, optionally prefixed `"not "`,
-resolved by dict lookup and truthiness — no comparisons, no operators.
+`condition` string. `flow_executor.py`'s grammar for that string (`_eval_condition`'s own
+docstring has the full, current spec — expanded from an earlier, comparison-less version,
+see "Flow condition language" under §10): `"<node_id>.output.<key...>"`, optionally
+prefixed `"not "`, optionally followed by a comparison (`== != > < >= <=` against a JSON or
+bare-word literal) — with no comparison, it's the referenced value's truthiness, same as
+originally.
 
 Rather than a free-text input (which lets someone type a condition the executor rejects at
-run time with no client-side warning), the edge inspector builds the string from three
-controls that mirror the grammar exactly:
+run time with no client-side warning), the edge inspector builds the string from controls
+that mirror the grammar exactly:
 1. A negate toggle ("branch when" / "branch unless")
 2. A source node dropdown, restricted to the edge's own `source` node (the condition can
    only reference the node the edge comes *from* — `_eval_condition` has no mechanism to
    reach any other node's output) — so really this is just shown as context, not a choice
 3. A key-path text input for everything after `.output.` (free text, since the executor
    itself does unstructured dict-key traversal — `output.decision`, `output.category`, etc.)
+4. A "Compare" select (is truthy / `==` / `!=` / `>` / `<` / `>=` / `<=`) and, when one of
+   the comparison operators is picked, a value text input — added in the same pass that
+   expanded the grammar, see §10.
 
 An edge with no condition set is unconditional (always taken). When a source node has
 *multiple* outgoing edges and none of them have a condition, `flow_executor.py` takes all of
@@ -612,6 +618,68 @@ browser: created an agent and a flow in the same workspace, opened the flow's Tr
 drawer, confirmed the "Agent/flow event" tab appears, filled in the form (source agent +
 `on_status`), submitted, and confirmed the new trigger renders with the resolved agent
 name and status in the list — screenshotted for the record.
+
+`tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests,
+unaffected) all clean.
+
+### Flow condition language
+
+**Done** (partially — see below). Expands `flow_executor.py`'s condition grammar beyond
+pure truthiness: `"[not ]<node_id>.output.<key...>[ <op> <value>]"`, where `<op>` is one of
+`== != > < >= <=` and `<value>` is a JSON literal (`"approved"`, `0.5`, `true`, `null`) or a
+bare unquoted word taken as a string (`approved` without quotes also works, so a condition
+author doesn't have to think about escaping in a form field). With no `<op> <value>`, the
+condition is exactly what it always was — the referenced value's truthiness — so every
+existing condition in the schema still parses and evaluates identically; this is additive,
+not a breaking grammar change.
+
+- `_COMPARISON_PATTERN` splits `<op> <value>` off the end of the condition text (the
+  `<node_id>.output.<key...>` part has no spaces, so a regex on whitespace is enough — no
+  real parser needed for a grammar this small).
+- `_parse_condition_literal` tries `json.loads` first (covers numbers, `true`/`false`/
+  `null`, and double-quoted strings), accepts single-quoted strings too (JSON doesn't, and
+  hand-typing `\"` into a form field is awkward), and falls back to the raw text as a bare
+  string otherwise.
+- `>`/`<`/`>=`/`<=` require both sides to be actual numbers (`_as_number`, which explicitly
+  rejects `bool` even though it's an `int` subclass in Python — `true > 0` being valid
+  Python is a footgun for a condition language users write by hand, not a feature) — a
+  condition that tries to compare a string or `None` with an order operator raises
+  `FlowExecutionError` rather than silently coercing, same as the existing "unsupported
+  condition syntax" error for malformed conditions.
+- `==`/`!=` work across any comparable types with no such restriction — `status == approved`
+  against a string output just works.
+- Still, deliberately, **no arithmetic and no referencing anything but one predecessor's
+  output** — not relaxed by this pass, called out explicitly in `_eval_condition`'s own
+  docstring as staying that way. A condition this small is meant to pick a branch, not
+  compute one; real logic belongs in an upstream agent or tool node. (The module's other
+  scope cut, no checkpointing, is also unchanged — still open, still exactly as described
+  in the module docstring.)
+- Frontend (`NodeInspector.tsx`'s `EdgePanel`): the three-control editor (negate toggle,
+  key-path input) gained a fourth control, a "Compare" select (`is truthy` plus the six
+  operators), and a value input that only appears once an operator other than "is truthy"
+  is picked. The parsing regex that reconstructs UI state from an existing `condition`
+  string on edge-select was extended to optionally capture the operator/value suffix,
+  so opening an edge that already has a comparison (including one set by hand via the API,
+  not just one built in this UI) correctly populates all four controls, not just the first
+  two. The caption below the controls was extended similarly, and adds "Both sides must be
+  numbers" for the four order operators specifically.
+
+Verified against the real Docker Postgres + API + orchestrator stack. First, the pure
+condition-evaluation logic in isolation (no DB): truthiness (unchanged), `==`/`!=` against
+both quoted and bare-word strings, `>`/`<`/`>=` against numbers, negation combined with a
+comparison, the non-numeric-order-comparison error, and the pre-existing malformed-syntax
+error — all as expected. Then end-to-end: built a real flow (trigger → classifier agent →
+two tool nodes) with the two outgoing edges from the classifier conditioned on
+`classifier.output.score > 0.5` and its negation, ran it through the real orchestrator
+(Anthropic client mocked) once with `score: 0.8` and once with `score: 0.2`, and confirmed
+in Postgres that exactly one branch's tool node appears in `node_outputs` each time — the
+correct one. Then patched one edge's condition to compare a non-existent (non-numeric) key
+with `>` and confirmed the run fails cleanly with `runs.error` set to the comparison's own
+error message, not an orchestrator crash. Finally, in a real browser: opened that flow's
+canvas, selected an edge with an existing comparison condition and confirmed the Compare
+select and Value input populated correctly from it (`unless` / `score` / `>` / `0.5`),
+changed it to `==` with a new value through the UI, saved a new version, and confirmed in
+Postgres that the persisted `condition` string matched exactly what the UI showed.
 
 `tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests,
 unaffected) all clean.

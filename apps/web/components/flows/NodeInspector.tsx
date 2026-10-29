@@ -18,6 +18,19 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Mirrors flow_executor.py's _COMPARISON_OPS -- "" (not in this list) means
+// "is truthy", the original condition behavior with no comparison at all.
+type ConditionOp = "" | "==" | "!=" | ">" | "<" | ">=" | "<=";
+const CONDITION_OPS: Exclude<ConditionOp, "">[] = ["==", "!=", ">", "<", ">=", "<="];
+const CONDITION_OP_LABELS: Record<Exclude<ConditionOp, "">, string> = {
+  "==": "==",
+  "!=": "!=",
+  ">": ">",
+  "<": "<",
+  ">=": ">=",
+  "<=": "<=",
+};
+
 function withoutInputMap(config: FlowNodeConfig): FlowNodeConfig {
   const { [INPUT_MAP_KEY]: _inputMap, ...rest } = config;
   return rest;
@@ -385,32 +398,57 @@ function EdgePanel({
 
   const [negate, setNegate] = useState(false);
   const [keyPath, setKeyPath] = useState("");
+  // "" means "is truthy" (the original, still-default behavior) -- any other
+  // value is one of the comparison operators flow_executor.py's
+  // _eval_condition understands.
+  const [op, setOp] = useState<ConditionOp>("");
+  const [value, setValue] = useState("");
 
   useEffect(() => {
     const condition = edge.data?.condition ?? null;
     if (!condition) {
       setNegate(false);
       setKeyPath("");
+      setOp("");
+      setValue("");
       return;
     }
-    const pattern = new RegExp(`^(not )?${escapeRegExp(edge.source)}\\.output\\.(.+)$`);
+    const pattern = new RegExp(
+      `^(not )?${escapeRegExp(edge.source)}\\.output\\.(\\S+)(?:\\s+(==|!=|>=|<=|>|<)\\s+(.+))?$`
+    );
     const match = condition.match(pattern);
     if (match) {
       setNegate(Boolean(match[1]));
       setKeyPath(match[2]);
+      setOp((match[3] as ConditionOp) ?? "");
+      setValue(match[4] ?? "");
     } else {
       setNegate(false);
       setKeyPath("");
+      setOp("");
+      setValue("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edge.id]);
 
-  function apply(nextNegate: boolean, nextKeyPath: string) {
+  function apply(nextNegate: boolean, nextKeyPath: string, nextOp: ConditionOp, nextValue: string) {
     setNegate(nextNegate);
     setKeyPath(nextKeyPath);
-    const trimmed = nextKeyPath.trim();
-    onUpdateEdgeCondition(edge.id, trimmed ? `${nextNegate ? "not " : ""}${edge.source}.output.${trimmed}` : null);
+    setOp(nextOp);
+    setValue(nextValue);
+    const trimmedKey = nextKeyPath.trim();
+    const trimmedValue = nextValue.trim();
+    const comparison = nextOp && trimmedValue ? ` ${nextOp} ${trimmedValue}` : "";
+    onUpdateEdgeCondition(
+      edge.id,
+      trimmedKey ? `${nextNegate ? "not " : ""}${edge.source}.output.${trimmedKey}${comparison}` : null
+    );
   }
+
+  const trimmedKey = keyPath.trim();
+  const trimmedValue = value.trim();
+  const captionComparison =
+    op && trimmedValue ? ` ${CONDITION_OP_LABELS[op]} ${trimmedValue}` : op ? "" : " is truthy";
 
   return (
     <PanelShell title="Edge" onDelete={() => onDeleteEdge(edge.id)}>
@@ -422,13 +460,13 @@ function EdgePanel({
         <label className="block text-sm font-medium text-gray-700">Branch</label>
         <div className="mt-1 flex gap-2 text-sm">
           <button
-            onClick={() => apply(false, keyPath)}
+            onClick={() => apply(false, keyPath, op, value)}
             className={`flex-1 rounded-md border px-2 py-1 ${!negate ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-700"}`}
           >
             when
           </button>
           <button
-            onClick={() => apply(true, keyPath)}
+            onClick={() => apply(true, keyPath, op, value)}
             className={`flex-1 rounded-md border px-2 py-1 ${negate ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-700"}`}
           >
             unless
@@ -442,16 +480,52 @@ function EdgePanel({
         <input
           id="condition-key-path"
           value={keyPath}
-          onChange={(e) => apply(negate, e.target.value)}
+          onChange={(e) => apply(negate, e.target.value, op, value)}
           placeholder="decision (leave blank for unconditional)"
           className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm focus:border-gray-500 focus:outline-none"
         />
-        <p className="mt-1 text-xs text-gray-400">
-          {keyPath.trim()
-            ? `Taken when ${edge.source}.output.${keyPath.trim()} is ${negate ? "falsy" : "truthy"}.`
-            : "Unconditional — always taken (and if this node has other outgoing edges with no condition either, all of them run in parallel)."}
-        </p>
       </div>
+      <div className="flex gap-2">
+        <div className="flex-1">
+          <label className="block text-sm font-medium text-gray-700" htmlFor="condition-op">
+            Compare
+          </label>
+          <select
+            id="condition-op"
+            value={op}
+            onChange={(e) => apply(negate, keyPath, e.target.value as ConditionOp, value)}
+            className="mt-1 w-full rounded-md border border-gray-300 px-2 py-2 text-sm focus:border-gray-500 focus:outline-none"
+          >
+            <option value="">is truthy</option>
+            {CONDITION_OPS.map((o) => (
+              <option key={o} value={o}>
+                {CONDITION_OP_LABELS[o]}
+              </option>
+            ))}
+          </select>
+        </div>
+        {op && (
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-gray-700" htmlFor="condition-value">
+              Value
+            </label>
+            <input
+              id="condition-value"
+              value={value}
+              onChange={(e) => apply(negate, keyPath, op, e.target.value)}
+              placeholder="approved, 0.5, true…"
+              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm focus:border-gray-500 focus:outline-none"
+            />
+          </div>
+        )}
+      </div>
+      <p className="text-xs text-gray-400">
+        {trimmedKey
+          ? `Taken when ${negate ? "NOT (" : ""}${edge.source}.output.${trimmedKey}${captionComparison}${
+              negate ? ")" : ""
+            }. ${op === ">" || op === "<" || op === ">=" || op === "<=" ? "Both sides must be numbers." : ""}`
+          : "Unconditional — always taken (and if this node has other outgoing edges with no condition either, all of them run in parallel)."}
+      </p>
     </PanelShell>
   );
 }
