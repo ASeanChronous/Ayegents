@@ -36,8 +36,9 @@ Explicitly **not** in this phase:
 - Editing a listing's name/description/category after creation, or unpublishing one.
   **Done** — see §9 below; moved out of this deferred list once built.
 - Monetization UI (price, payment). **Done** — see §10 below; moved out of this deferred
-  list once built, though deliberately scoped narrower than architecture doc §6's full
-  "revenue share, paid listings" — see that section for exactly what "narrower" means.
+  list once built, originally scoped narrower than architecture doc §6's full "revenue
+  share, paid listings" (buyer-side only, no creator payout) — the other half, creator
+  payouts via Stripe Connect, is **also done**, see §11.
 
 ## 2. Needed backend endpoints
 
@@ -313,17 +314,18 @@ at the same time.
 
 ## 10. Monetization UI
 
-**Done, scoped narrower than architecture doc §6's full "revenue share, paid listings."**
-A listing can carry a price and be bought via Stripe Checkout, gating install the same way
-tool-category approval already does. What this does **not** build: creator payouts. Funds
-settle into the *platform's own* Stripe account; a listing's publisher doesn't receive a
-share of what it earns. Stripe Connect onboarding (KYC, tax-form collection, payout
-scheduling) for that is a real, separate undertaking with real compliance tradeoffs this
-pass deliberately didn't make — architecture doc §10 already calls "monetized marketplace
-listings" out as V2 scope, distinct from "listings can have a price and be bought," which is
-what this closes. `services/api/app/routers/payments.py`'s own docstring has the full
-reasoning, and the UI says as much too: the publish form's price field is captioned "No
-payouts yet — proceeds go to the platform account," not left implicit.
+**Done, scoped narrower than architecture doc §6's full "revenue share, paid listings"
+at the time this section was written.** A listing can carry a price and be bought via
+Stripe Checkout, gating install the same way tool-category approval already does. What
+this pass did **not** build: creator payouts — funds settled entirely into the
+*platform's own* Stripe account, with a listing's publisher receiving no share. **Update:
+that gap is now closed, see §11** (Stripe Connect). Everything below describes this
+section's own original increment as built and verified at the time; §11 is additive on
+top of it, not a rewrite — the Checkout/webhook/purchase-gating mechanics described here
+are unchanged, §11 just adds a destination-charge split to the same Checkout Session.
+
+`services/api/app/routers/payments.py`'s own docstring has the full reasoning for both
+passes together.
 
 Design:
 - `listings.price_cents`/`listings.currency` (migration `0008_listing_pricing.sql`) — 0 is
@@ -400,6 +402,77 @@ confirmed it shows the normal install panel instead; navigated directly to
 `?purchase=success` and `?purchase=cancelled` and confirmed both render the right in-between
 state; opened both listings' Edit drawers and confirmed the Price field prefills correctly
 (blank for free, "9.99" for a $9.99 listing).
+
+`tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests, unaffected)
+all clean.
+
+## 11. Creator payouts (Stripe Connect)
+
+**Done.** Closes the gap §10 deliberately left open: a listing's publisher now actually
+receives a share of each sale, not the platform keeping all of it.
+
+Design: Stripe Connect **Express** accounts, one per workspace (the publishing entity, same
+unit every other marketplace interaction is already scoped to) — chosen over
+Standard/Custom because Stripe hosts almost the entire onboarding UI (KYC, bank details, tax
+info), which is the whole point: this platform owns none of that compliance surface itself,
+just an account id and a cached `payouts_enabled` flag. **Destination charges**, not a
+hand-rolled payout job: a priced listing's Checkout Session now also carries
+`payment_intent_data.transfer_data.destination` (the connected account) and
+`application_fee_amount` (the platform's cut, `settings.platform_fee_bps` — **15%**, a real
+product/business number picked deliberately rather than invented in passing, of the sale
+price) — Stripe splits the charge at capture time and pays the connected account out on its
+own payout schedule. There is no code in this project that ever moves money between
+accounts; Stripe does that part entirely.
+
+- `workspaces.stripe_connect_account_id`/`stripe_connect_payouts_enabled` (migration
+  `0009_stripe_connect.sql`) — the latter is a cached flag, not computed on every read,
+  kept current by the `account.updated` webhook and self-healed by a live
+  `stripe.Account.retrieve` on every `GET .../payouts/status` call (covers the same
+  "redirect-back races the webhook" gap the purchase-confirmation flow (§10) already had to
+  handle, this time for "did Stripe finish verifying this account" instead of "did Stripe
+  finish charging this card"). `listing_purchases` gained `application_fee_cents`/
+  `stripe_connect_account_id`, captured at purchase time so a later platform-fee change
+  never rewrites an earlier sale's accounting.
+- `POST .../payouts/connect-onboarding` finds-or-creates the workspace's Express account,
+  then an Account Link (Stripe's hosted onboarding flow) pointed back at `/marketplace`
+  either way — safe to call again for an account that exists but never finished onboarding,
+  since Account Links are single-use/short-lived but the underlying account isn't recreated.
+- `GET .../payouts/status` is the self-healing read described above — `{connected,
+  payouts_enabled}`.
+- **A listing can't carry a nonzero price unless its workspace has finished Connect
+  onboarding** (`create_listing`/`update_listing`'s shared `_require_payouts_enabled`
+  check, marketplace.py) — avoids ever publishing a priced listing with nowhere for its
+  share of a sale to go. `create_checkout_session` (§10) re-checks this at checkout time
+  too, as defense in depth: a Connect account can be disabled by Stripe for risk/compliance
+  reasons at any time *after* a listing was published, and a sale with nowhere for the
+  publisher's share to go is worse than a buyer seeing a clear error.
+- The Stripe webhook handler (§10, same endpoint) gained an `account.updated` branch,
+  updating the cached `payouts_enabled` flag by matching `stripe_connect_account_id`.
+- Frontend: new `<PayoutsPanel>`, shown above the My listings table (exactly where pricing a
+  listing would otherwise 400) — three states: not connected ("Connect with Stripe"),
+  connected but not yet finished onboarding ("Finish Stripe onboarding," the same button,
+  since re-onboarding just gets a fresh Account Link for the same account), and payouts
+  enabled (a small green confirmation, no button). `PublishListingDrawer`'s price-field
+  caption was updated to point here instead of the now-stale "no payouts yet" text §10 had.
+
+Verified against the real Docker Postgres + API stack, Stripe itself mocked (`stripe.
+Account.create`, `stripe.AccountLink.create`, `stripe.Account.retrieve`, `stripe.checkout.
+Session.create`, `stripe.Webhook.construct_event`) for the same reason §10's verification
+mocked it — no live Stripe account to test against. Via `curl` against a real (unmocked)
+server process: confirmed pricing a listing before connecting 400s, and that
+`connect-onboarding` against an invalid key fails as a clean 502, not a raw exception. Via an
+in-process ASGI client against the real app and database: onboarded a workspace (mocked
+account creation), confirmed `GET .../status` immediately showed `payouts_enabled: true` via
+the self-healing live lookup (before any webhook), confirmed a priced listing could now be
+created where it couldn't before, confirmed the resulting Checkout Session's
+`payment_intent_data` carried the correct destination account and exactly 15% of the price
+as `application_fee_amount` (2000 → 300), confirmed those exact figures landed on the
+`listing_purchases` row, and ran the full purchase → webhook → install sequence through to a
+successful install. Separately, fired a real `account.updated` webhook event and confirmed
+it flipped the cached `payouts_enabled` flag from false to true. Then in a real browser:
+a connected workspace's My listings tab showed the green "Payouts connected" confirmation;
+switching to a workspace that had never connected showed the "Connect with Stripe" gate, and
+clicking it surfaced the mocked-out Stripe error in the UI instead of failing silently.
 
 `tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests, unaffected)
 all clean.

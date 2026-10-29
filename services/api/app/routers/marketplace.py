@@ -121,6 +121,23 @@ class ListingUpdate(BaseModel):
     price_cents: int | None = Field(default=None, ge=0)
 
 
+async def _require_payouts_enabled(conn, workspace_id: UUID) -> None:
+    """Gates giving a listing a nonzero price (routers/payments.py's own docstring has
+    the full Connect design) on the publishing workspace having finished Stripe Connect
+    onboarding -- never publish a priced listing with nowhere for its share of a sale to
+    go. Called from both create_listing and update_listing below, whichever one is about
+    to set price_cents > 0.
+    """
+    payouts_enabled = await conn.fetchval(
+        "select stripe_connect_payouts_enabled from workspaces where id = $1", workspace_id
+    )
+    if not payouts_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="connect a payout account before pricing a listing (Workspace settings → Payouts)",
+        )
+
+
 @listings_router.patch("/{listing_id}", response_model=WorkspaceListingOut)
 async def update_listing(
     workspace_id: UUID, listing_id: UUID, body: ListingUpdate, user_id: UUID = Depends(get_current_user_id)
@@ -143,6 +160,9 @@ async def update_listing(
         )
         if listing is None:
             raise HTTPException(status_code=404, detail="listing not found")
+
+        if updates.get("price_cents", 0) > 0:
+            await _require_payouts_enabled(conn, workspace_id)
 
         set_clauses = [f"{key} = ${i}" for i, key in enumerate(updates, start=1)]
         row = await conn.fetchrow(
@@ -195,6 +215,9 @@ async def unpublish_listing(workspace_id: UUID, listing_id: UUID, user_id: UUID 
 async def create_listing(workspace_id: UUID, body: ListingCreate, user_id: UUID = Depends(get_current_user_id)):
     pool = await get_pool()
     async with pool.acquire() as conn:
+        if body.price_cents > 0:
+            await _require_payouts_enabled(conn, workspace_id)
+
         if body.source_agent_id is not None:
             agent = await conn.fetchrow(
                 "select id from agents where id = $1 and workspace_id = $2", body.source_agent_id, workspace_id

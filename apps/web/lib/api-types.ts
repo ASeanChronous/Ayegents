@@ -541,7 +541,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/webhooks/{trigger_id}": {
+    "/workspaces/{workspace_id}/payouts/connect-onboarding": {
         parameters: {
             query?: never;
             header?: never;
@@ -550,8 +550,42 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Fire Webhook */
-        post: operations["fire_webhook_webhooks__trigger_id__post"];
+        /**
+         * Create Connect Onboarding
+         * @description Find-or-create this workspace's Express account, then an Account Link (Stripe's
+         *     own hosted onboarding flow — KYC, bank details, tax info, none of it touched by this
+         *     project) pointed back at the marketplace page either way. Safe to call again for a
+         *     workspace that already has an account but never finished onboarding (Stripe's Account
+         *     Links are single-use and short-lived, so "onboarding again" just means "a fresh link
+         *     for the same underlying account," not a second account).
+         */
+        post: operations["create_connect_onboarding_workspaces__workspace_id__payouts_connect_onboarding_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/payouts/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Payouts Status
+         * @description Self-healing, not just a cache read: right after an onboarding redirect-back,
+         *     `workspaces.stripe_connect_payouts_enabled` may not have caught up yet (the
+         *     `account.updated` webhook below races the browser's own redirect, same shape the
+         *     purchase-confirmation flow already has to handle) — so when a connected account isn't
+         *     yet marked enabled, this does one live `stripe.Account.retrieve` and updates the cache
+         *     before answering, rather than making the frontend poll and hope. Once enabled, trusts
+         *     the cache (no Stripe round trip needed on every status check from then on).
+         */
+        get: operations["get_payouts_status_workspaces__workspace_id__payouts_status_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -569,6 +603,23 @@ export interface paths {
         put?: never;
         /** Stripe Webhook */
         post: operations["stripe_webhook_webhooks_stripe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/{trigger_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fire Webhook */
+        post: operations["fire_webhook_webhooks__trigger_id__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -922,6 +973,18 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** OnboardingOut */
+        OnboardingOut: {
+            /** Onboarding Url */
+            onboarding_url: string;
+        };
+        /** PayoutsStatusOut */
+        PayoutsStatusOut: {
+            /** Connected */
+            connected: boolean;
+            /** Payouts Enabled */
+            payouts_enabled: boolean;
         };
         /** PurchaseStatusOut */
         PurchaseStatusOut: {
@@ -2593,26 +2656,55 @@ export interface operations {
             };
         };
     };
-    fire_webhook_webhooks__trigger_id__post: {
+    create_connect_onboarding_workspaces__workspace_id__payouts_connect_onboarding_post: {
         parameters: {
             query?: never;
-            header?: {
-                "x-webhook-secret"?: string | null;
-            };
+            header?: never;
             path: {
-                trigger_id: string;
+                workspace_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            202: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OnboardingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_payouts_status_workspaces__workspace_id__payouts_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayoutsStatusOut"];
                 };
             };
             /** @description Validation Error */
@@ -2644,6 +2736,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StripeWebhookOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fire_webhook_webhooks__trigger_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-webhook-secret"?: string | null;
+            };
+            path: {
+                trigger_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

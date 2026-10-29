@@ -26,6 +26,7 @@ app.include_router(listings.router)
 app.include_router(marketplace.listings_router)
 app.include_router(marketplace.install_router)
 app.include_router(payments.checkout_router)
+app.include_router(payments.payouts_router)
 # Public, unauthenticated -- see webhooks.py's/payments.py's own docstrings.
 # Order matters here: FastAPI matches routes in registration order, and
 # webhooks.router's POST /webhooks/{trigger_id} is a path parameter that

@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
+    # The platform's cut of a paid listing's sale price, in basis points (1500 = 15.00%) --
+    # passed to Stripe as a flat application_fee_amount computed from this at checkout time
+    # (routers/payments.py), not a Stripe-side percentage parameter (Stripe's own API takes
+    # a flat cents amount, not a rate). A deliberate product/business number, not something
+    # to change casually — see routers/payments.py's own docstring for the reasoning.
+    platform_fee_bps: int = 1500
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:

@@ -10,6 +10,7 @@ import { DataTable } from "@/components/DataTable";
 import { Badge } from "@/components/Badge";
 import { PublishListingDrawer } from "@/components/marketplace/PublishListingDrawer";
 import { EditListingDrawer } from "@/components/marketplace/EditListingDrawer";
+import { PayoutsPanel } from "@/components/marketplace/PayoutsPanel";
 
 type Listing = {
   id: string;
@@ -232,10 +233,13 @@ export default function MarketplacePage() {
             ]}
           />
         )
-      ) : mineLoading ? (
-        <p className="text-sm text-gray-500">Loading…</p>
       ) : (
-        <DataTable<MyListing>
+        <div className="space-y-3">
+          <PayoutsPanel workspaceId={workspaceId} />
+          {mineLoading ? (
+            <p className="text-sm text-gray-500">Loading…</p>
+          ) : (
+            <DataTable<MyListing>
           rows={myListings ?? []}
           keyFn={(l) => l.id}
           emptyMessage="You haven't published anything yet — publish an agent or flow to get started."
@@ -276,7 +280,9 @@ export default function MarketplacePage() {
               ),
             },
           ]}
-        />
+            />
+          )}
+        </div>
       )}
 
       {workspaceId && agents && flows && (

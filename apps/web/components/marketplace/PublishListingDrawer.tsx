@@ -223,7 +223,8 @@ export function PublishListingDrawer({
             className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-gray-500 focus:outline-none"
           />
           <p className="mt-1 text-xs text-gray-400">
-            Paid via Stripe Checkout at install time. No payouts yet — proceeds go to the platform account.
+            Paid via Stripe Checkout at install time. Requires a connected Stripe payout account first — see
+            Payouts on the My listings tab.
           </p>
         </div>
 
