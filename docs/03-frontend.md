@@ -151,8 +151,8 @@ Two things noticed while building this, not fixed (out of scope of adding the en
 themselves, flagged so the inspector UI doesn't present them as meaningful): `total_cost_usd`
 and every step's `cost_usd` were always `0` — no model-tier pricing table existed yet to
 compute them from token counts (closed below, §6a). And `run_steps.started_at`/`finished_at`
-are always `null` — the orchestrator only ever populates `latency_ms`, never those two
-columns (still open).
+were always `null` — the orchestrator only ever populated `latency_ms`, never those two
+columns (closed below, §6b).
 
 ## 6a. Model-tier cost table
 
@@ -198,6 +198,38 @@ up into the *parent* run's `total_cost_usd` correctly, since they share the same
 Finally, in a real browser: loaded `/runs` and confirmed the new Cost column renders, opened a
 run's inspector and confirmed both the "Estimated cost" stat and per-step costs render with
 the `<$0.01` / `$X.XX` formatting.
+
+## 6b. `run_steps` timestamps
+
+**Done.** Closes the `started_at`/`finished_at` gap noted above: both columns existed since
+`0001_init_schema.sql` and were already exposed by `RunStepOut`, but nothing ever wrote them
+— the orchestrator only ever computed `latency_ms`.
+
+Two clocks, deliberately, at every call site that logs a step (the `agent_call` insert in
+`executor.py`'s `_execute_agent_loop`, and the `tool_call` insert in `_log_tool_step`, called
+from both `executor.py`'s own tool dispatch and `flow_executor.py`'s tool-node): `time.
+monotonic()` still feeds `latency_ms` (a duration measurement, which needs to be immune to
+system clock adjustments, not the actual wall-clock moment), while a `datetime.now(timezone.
+utc)` captured at that same instant feeds `started_at`/`finished_at` (what the inspector
+actually shows — real times, not an offset). `_log_tool_step` gained a `started_at` parameter
+threaded through from `_dispatch_and_log`/the flow tool-node, captured right alongside the
+pre-existing monotonic `started` so both clocks start at the exact same moment.
+
+Surfaced in the UI: the run inspector's step timeline gained a "Started \<time\>" line in
+each step's expanded detail (previously the only per-step timing shown was `latency_ms`).
+
+Verified against the real Docker Postgres + API + orchestrator stack: ran a real agent
+through the orchestrator (Anthropic client mocked) with a response sequence that forces a
+tool call — `agent_call` → `tool_call` → `agent_call` — exercising both insert sites in one
+run. Confirmed via `docker exec aeflow-pg psql` that all three `run_steps` rows got real,
+distinct `started_at`/`finished_at` values in the correct chronological order, each with
+`started_at <= finished_at`, and that `runs.started_at`/`finished_at` (already working
+before this change) bracket all three. Then in a real browser: opened that run's inspector,
+expanded a step, and confirmed the "Started \<time\>" line renders — screenshotted for the
+record.
+
+`tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests, unaffected)
+all clean.
 
 ## 7. Phased build order
 

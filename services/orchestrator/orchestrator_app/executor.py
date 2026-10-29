@@ -14,6 +14,7 @@ agent-as-tool case.
 
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from uuid import UUID
 
 import asyncpg
@@ -189,7 +190,13 @@ async def _execute_agent_loop(
 
     try:
         for _ in range(max_steps):
+            # Two clocks, deliberately: time.monotonic() for latency_ms (immune to
+            # system clock adjustments, which matter for a duration measurement but
+            # not for the wall-clock timestamps below), datetime.now() for
+            # started_at/finished_at, which the inspector shows as actual times, not
+            # durations.
             started = time.monotonic()
+            started_at = datetime.now(timezone.utc)
             response = await client.messages.create(
                 model=model_id,
                 max_tokens=4096,
@@ -198,6 +205,7 @@ async def _execute_agent_loop(
                 tools=tool_defs or None,
             )
             latency_ms = int((time.monotonic() - started) * 1000)
+            finished_at = datetime.now(timezone.utc)
             total_tokens += response.usage.input_tokens + response.usage.output_tokens
             assistant_content = [block.model_dump() for block in response.content]
             messages.append({"role": "assistant", "content": assistant_content})
@@ -211,8 +219,9 @@ async def _execute_agent_loop(
                     """
                     insert into run_steps
                         (run_id, step_index, kind, agent_id, node_id, input, output,
-                         tokens_input, tokens_output, cost_usd, latency_ms, status)
-                    values ($1, $2, 'agent_call', $3, $4, $5, $6, $7, $8, $9, $10, 'succeeded')
+                         tokens_input, tokens_output, cost_usd, latency_ms, status,
+                         started_at, finished_at)
+                    values ($1, $2, 'agent_call', $3, $4, $5, $6, $7, $8, $9, $10, 'succeeded', $11, $12)
                     """,
                     run_id,
                     step_index,
@@ -224,6 +233,8 @@ async def _execute_agent_loop(
                     response.usage.output_tokens,
                     cost_usd,
                     latency_ms,
+                    started_at,
+                    finished_at,
                 )
                 await notify_run(conn, run_id)
 
@@ -267,10 +278,11 @@ async def _dispatch_and_log(
     tool_input: dict,
 ) -> dict:
     started = time.monotonic()
+    started_at = datetime.now(timezone.utc)
 
     if tool is None:
         error = f"agent has no tool attached for {tool_name!r}"
-        await _log_tool_step(conn, run_id, None, tool_input, {"error": error}, started, "failed", error)
+        await _log_tool_step(conn, run_id, None, tool_input, {"error": error}, started, started_at, "failed", error)
         return {"type": "tool_result", "tool_use_id": tool_use_id, "content": error, "is_error": True}
 
     try:
@@ -283,25 +295,33 @@ async def _dispatch_and_log(
             run_id=run_id,
             depth=depth + 1,
         )
-        await _log_tool_step(conn, run_id, tool["id"], tool_input, result, started, "succeeded", None)
+        await _log_tool_step(conn, run_id, tool["id"], tool_input, result, started, started_at, "succeeded", None)
         return {"type": "tool_result", "tool_use_id": tool_use_id, "content": str(result)}
     except ToolDispatchError as exc:
-        await _log_tool_step(conn, run_id, tool["id"], tool_input, {"error": str(exc)}, started, "failed", str(exc))
+        await _log_tool_step(
+            conn, run_id, tool["id"], tool_input, {"error": str(exc)}, started, started_at, "failed", str(exc)
+        )
         return {"type": "tool_result", "tool_use_id": tool_use_id, "content": str(exc), "is_error": True}
 
 
-async def _log_tool_step(conn, run_id, tool_id, tool_input, output, started, status, error) -> None:
+async def _log_tool_step(conn, run_id, tool_id, tool_input, output, started, started_at, status, error) -> None:
     """Allocates step_index and inserts atomically (see _run_step_lock) —
     index allocation deliberately happens here, right before the insert,
     not before the (possibly slow, e.g. a real HTTP call or E2B sandbox)
-    tool dispatch that already ran by the time this is called."""
+    tool dispatch that already ran by the time this is called. `started`
+    (time.monotonic(), from _dispatch_and_log) feeds latency_ms; `started_at`
+    (datetime.now(), captured at that same moment) feeds the started_at
+    column below -- see _execute_agent_loop's own comment on why both."""
     latency_ms = int((time.monotonic() - started) * 1000)
+    finished_at = datetime.now(timezone.utc)
     async with _run_step_lock(conn, run_id):
         step_index = await _next_step_index(conn, run_id)
         await conn.execute(
             """
-            insert into run_steps (run_id, step_index, kind, tool_id, input, output, latency_ms, status, error)
-            values ($1, $2, 'tool_call', $3, $4, $5, $6, $7, $8)
+            insert into run_steps
+                (run_id, step_index, kind, tool_id, input, output, latency_ms, status, error,
+                 started_at, finished_at)
+            values ($1, $2, 'tool_call', $3, $4, $5, $6, $7, $8, $9, $10)
             """,
             run_id,
             step_index,
@@ -311,5 +331,7 @@ async def _log_tool_step(conn, run_id, tool_id, tool_input, output, started, sta
             latency_ms,
             status,
             error,
+            started_at,
+            finished_at,
         )
     await notify_run(conn, run_id)

@@ -22,6 +22,7 @@ roadmap as later work, not oversights:
 import json
 import operator
 import time
+from datetime import datetime, timezone
 from typing import Annotated, Any, TypedDict
 from uuid import UUID
 
@@ -304,6 +305,7 @@ def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps,
                     raise FlowExecutionError(f"node {node['id']!r}: tool {tool_id} not found")
                 tool_input = _resolve_input_dict(node, state, initial_input)
                 started = time.monotonic()
+                started_at = datetime.now(timezone.utc)
                 try:
                     result = await dispatch_tool(
                         conn,
@@ -315,11 +317,19 @@ def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps,
                         depth=0,
                     )
                     await _log_tool_step(
-                        conn, run_id, tool["id"], tool_input, result, started, "succeeded", None
+                        conn, run_id, tool["id"], tool_input, result, started, started_at, "succeeded", None
                     )
                 except ToolDispatchError as exc:
                     await _log_tool_step(
-                        conn, run_id, tool["id"], tool_input, {"error": str(exc)}, started, "failed", str(exc)
+                        conn,
+                        run_id,
+                        tool["id"],
+                        tool_input,
+                        {"error": str(exc)},
+                        started,
+                        started_at,
+                        "failed",
+                        str(exc),
                     )
                     raise FlowExecutionError(f"node {node['id']!r} (tool): {exc}") from exc
             return {"node_outputs": {node["id"]: {"output": result}}}

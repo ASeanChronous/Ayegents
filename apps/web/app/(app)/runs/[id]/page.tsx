@@ -36,6 +36,7 @@ type RunStep = {
   latency_ms: number | null;
   status: string;
   error: string | null;
+  started_at: string | null;
 };
 
 // List-price estimate, not a billing-accurate figure — see
@@ -187,6 +188,11 @@ function RunStepTimeline({ steps }: { steps: RunStep[] }) {
             {expanded && (
               <div className="grid grid-cols-2 gap-4 border-t border-gray-100 bg-gray-50 px-4 py-3">
                 {step.error && <p className="col-span-2 text-sm text-red-600">{step.error}</p>}
+                {step.started_at && (
+                  <p className="col-span-2 text-xs text-gray-500">
+                    Started {new Date(step.started_at).toLocaleString()}
+                  </p>
+                )}
                 <JsonPanel title="Step input" value={step.input} />
                 <JsonPanel title="Step output" value={step.output} />
               </div>
