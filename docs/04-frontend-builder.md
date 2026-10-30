@@ -893,3 +893,103 @@ normally alongside the checkpointed flow path.
 
 `python3 -m py_compile` clean on every changed file; no frontend changes, so no
 `tsc`/`build`/`test` pass was needed for this one.
+
+### Telegram trigger (first chat-platform integration)
+
+**Done.** The first of what could be several chat-platform triggers (Slack, Teams, ...) --
+a message sent to a connected Telegram bot starts a flow run, and the run's result is sent
+back to that chat once it finishes, success or failure. Picked Telegram first because it's
+by far the cheapest to stand up: a plain HTTPS Bot API, no OAuth-app review process the way
+Slack and Teams both require.
+
+Design, a fifth `trigger_kind`:
+- A Telegram bot token is a third-party credential (whoever has it can impersonate the bot
+  anywhere, not just on this trigger) -- the same threat model `tool_credential_secrets`
+  already exists for, not a webhook trigger's own low-stakes, server-generated secret
+  (`triggers.py`'s own docstring has the full reasoning for why webhook secrets *don't* get
+  this treatment). So it does **not** live in `triggers.config` jsonb like every other
+  trigger kind's config -- it's Fernet-encrypted into a new `trigger_credential_secrets`
+  table (migration `0010_telegram_trigger.sql`), one row per trigger, via `app.secrets.
+  encrypt_secret` -- the same split, same encryption, `tool_credential_secrets` already
+  uses. Telegram's own per-request verification secret (`config.webhook_secret`, handed to
+  Telegram's own `setWebhook` call) *does* stay in plain `config`, same as a webhook
+  trigger's secret -- that one's workspace-scoped and internal (Telegram↔this server only),
+  a materially lower threat tier than a credential that works anywhere on Telegram's
+  platform.
+- `services/api/app/telegram_client.py` (new) -- a thin, SDK-free Bot API client
+  (`getMe`, `setWebhook`), used only at trigger-create time. Mirrors `orchestrator_app/
+  telegram_reply.py`'s own thin client (`sendMessage`, the reply side) the same way
+  `app/secrets.py` (encrypt) and `orchestrator_app/secrets.py` (decrypt) already split --
+  the API half never sends a message, the orchestrator half never registers a webhook.
+- Creating a telegram trigger (`triggers.py`'s `create_trigger`) calls `getMe` first (a
+  typo'd or revoked token fails loudly here, not silently on the first real message), then
+  `setWebhook` with this trigger's own webhook URL and a fresh `secrets.token_urlsafe(32)`
+  verification secret. The trigger's own `id` is generated client-side
+  (`uuid4()`, for *every* kind now, not just telegram) rather than left to the table's
+  `default gen_random_uuid()` -- telegram's webhook URL
+  (`{api_public_url}/webhooks/telegram/{trigger_id}`) needs to exist *before* the row does,
+  and there's no clean "insert, then go back and register the URL" two-step otherwise.
+- `POST /webhooks/telegram/{trigger_id}` (new, `webhooks.py`, public/unauthenticated like
+  the existing generic webhook trigger) verifies the `X-Telegram-Bot-Api-Secret-Token`
+  header against `config.webhook_secret`, same 404-for-everything posture the generic
+  webhook trigger already uses. Always acks `{"ok": true}` for anything it doesn't want to
+  act on (a disabled trigger, a non-text update like a sticker or a chat-join event, a
+  malformed body) rather than 4xx/5xx-ing -- Telegram retries a delivery that doesn't get a
+  prompt 200, and can eventually disable the webhook over what isn't actually a failure. A
+  real message starts a run exactly like the generic webhook does (`runs` + `run_queue`
+  insert), with `input = {"message": <text>, "telegram_chat_id": <chat.id>}`.
+- `orchestrator_app/telegram_reply.py` (new) -- `reply_if_telegram_triggered`, called from
+  `flow_executor.py`'s `run_flow` right alongside `fire_agent_event_triggers`, same
+  best-effort, never-raises-into-the-run shape, on both the success and failure path. Looks
+  up the run's trigger, decrypts the bot token, and calls `sendMessage` with a best-effort
+  summary of the run's output (every `{"output": {"text": ...}}` shaped node in
+  `node_outputs`, joined -- handles a single-agent flow and a short multi-agent chain the
+  same way, falling back to a truncated JSON dump if nothing text-shaped exists) on success,
+  or `"⚠️ <error>"` on failure. A reply failure (Telegram unreachable, the bot removed from
+  the chat) is swallowed, not surfaced -- the run's own `output`/`error` is the real record
+  of what happened; Telegram is a notification channel on top of that, not the source of
+  truth.
+- Frontend (`TriggersDrawer.tsx`): a fourth add-trigger tab, "Telegram," always offered (no
+  prerequisite data the way agent_event needs other agents/flows to exist). A password-type
+  bot-token field with a link to `@BotFather`, captioned "Verified against Telegram and
+  encrypted immediately — never shown again," the same posture a tool credential's own form
+  already uses. An existing trigger's row shows "Connected to @\<bot_username\> — message
+  the bot to start this flow."
+- Known, deliberately accepted gap: deleting a telegram trigger doesn't call Telegram's own
+  `deleteWebhook` first -- this API's `secrets.py` only ever *encrypts* (by design, mirroring
+  the orchestrator-only-decrypts split), so reaching the bot token to make that call would
+  mean breaking that split for one cleanup call. Telegram keeps POSTing to a now-404ing URL
+  and backs off/disables the webhook itself after enough consecutive failures -- harmless,
+  just not instant. Also out of scope, consistent with every trigger kind so far: no access
+  control beyond the bot token itself being private (anyone who messages a connected bot can
+  start a run) -- a real consideration for a future pass, not pretended away here.
+
+Verified against the real Docker Postgres + API + orchestrator stack, Telegram's own Bot API
+mocked for the create-time calls (no real bot to test against) but the real, unmocked
+`getMe` call exercised separately against `api.telegram.org` with a deliberately fake token,
+confirming the real rejection ("Not Found") surfaces correctly end to end, UI included (see
+below). Via an in-process ASGI client against the real app and database: created a telegram
+trigger (mocked `getMe`/`setWebhook`), confirmed `config.bot_username` was set and the raw
+bot token never appeared in any API response, confirmed the token was stored encrypted (not
+equal to the plaintext bytes) in `trigger_credential_secrets`; sent a webhook request with
+the wrong secret (404), then the correct secret and a real Telegram `Update`-shaped payload
+(a `runs` + `run_queue` row created with the exact expected `input`); disabled the trigger
+and confirmed a further webhook delivery acks but creates no new run; sent a non-text
+("sticker") update and confirmed the same. Then ran the real orchestrator (Anthropic client
+mocked) against this exact trigger/flow: a successful run correctly called `sendMessage`
+with the *decrypted* bot token, the right `chat_id`, and the agent's own reply text; a
+second run engineered to fail confirmed the `"⚠️ <error>"` failure-path reply, with the
+run's own real `FlowExecutionError` message inside it. (One real test-harness lesson along
+the way, not a product bug: the API and orchestrator containers must share the same
+`ENCRYPTION_KEY` for this to decrypt at all -- generating a fresh random key per container
+start, as earlier Docker verification passes in this project did when neither side needed
+to read what the other wrote, silently breaks Telegram's encrypt-here/decrypt-there split;
+fixed by pinning one shared key across both containers for this verification, which is also
+simply what a real deployment's own config already requires.) Finally, in a real browser:
+signed up, created a workspace and a flow, opened Triggers, confirmed the "Telegram" tab
+renders unconditionally, filled in a bot token and submitted, and confirmed the real
+Telegram rejection ("invalid Telegram bot token: Not Found") rendered cleanly in the form
+instead of a raw exception.
+
+`tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests, unaffected)
+all clean.

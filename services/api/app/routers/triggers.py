@@ -1,40 +1,53 @@
-"""Webhook/schedule/agent-event triggers (docs/01-architecture.md's V1 scope, picked up out
-of docs/04-frontend-builder.md §10's open items). A trigger is flow-level config for *how a
-run gets started*, separate from the flow spec's own trigger node (which only ever seeds a
-run's input -- it's agnostic to whether the run was started manually, by a webhook POST, or
-by a schedule firing). That's why this lives in its own router keyed on flow_id, not as
-part of the FlowSpec the canvas edits.
+"""Webhook/schedule/agent-event/telegram triggers (docs/01-architecture.md's V1 scope,
+picked up out of docs/04-frontend-builder.md §10's open items). A trigger is flow-level
+config for *how a run gets started*, separate from the flow spec's own trigger node (which
+only ever seeds a run's input -- it's agnostic to whether the run was started manually, by
+a webhook POST, or by a schedule firing). That's why this lives in its own router keyed on
+flow_id, not as part of the FlowSpec the canvas edits.
 
-Four kinds handled here: 'manual' (a placeholder row with nothing to configure -- exists
-so a flow's trigger list can show "this flow can also be started directly," matching how
-Runs already lets you start a flow by hand, step 7 of the build order), 'webhook',
-'schedule', and 'agent_event' -- the fourth trigger_kind the schema enum allows, for one
-flow starting automatically when another agent's or flow's run reaches a given terminal
-status (the "flow-to-flow wiring" the webhook/schedule increment deliberately deferred).
+Five kinds handled here: 'manual' (a placeholder row with nothing to configure -- exists so
+a flow's trigger list can show "this flow can also be started directly," matching how Runs
+already lets you start a flow by hand, step 7 of the build order), 'webhook', 'schedule',
+'agent_event' (the schema's fourth kind, for one flow starting automatically when another
+agent's or flow's run reaches a given terminal status), and 'telegram' -- the first
+chat-platform trigger: a message sent to a connected Telegram bot starts this flow, and the
+run's result is sent back to that chat once it finishes
+(services/orchestrator/orchestrator_app/telegram_reply.py).
 
-Both webhook/schedule config and agent_event's source live in `triggers.config` jsonb, per
+Webhook/schedule config and agent_event's source live in `triggers.config` jsonb, per
 docs/02-schema.md §3 ("webhook secret, cron expr, etc.") -- no new secrets-split table the
-way tool credentials get one (services/api/app/routers/tools.py): a webhook secret only has
-to be hard to guess, not survive the same threat model as a third-party API key, so the
-extra machinery isn't justified here.
+way tool credentials get one: a webhook secret only has to be hard to guess, not survive the
+same threat model as a third-party API key. A Telegram bot token is a third-party credential
+by exactly that definition (whoever has it can impersonate the bot anywhere, not just on
+this trigger), so it does *not* live in `config` -- it's Fernet-encrypted into
+`trigger_credential_secrets` (migration `0010_telegram_trigger.sql`), the same split
+`tool_credential_secrets` already uses, via `app.secrets.encrypt_secret`. Telegram's own
+per-request verification secret (`config.webhook_secret`, generated here and handed to
+Telegram's `setWebhook`) stays in plain `config` like a webhook trigger's own secret --
+that one is workspace-scoped and internal (Telegram↔this server only), the same lower
+threat tier the module docstring above already reasons about for webhook secrets, not a
+third-party credential.
 """
 
 import secrets
 from datetime import datetime
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, model_validator
 
+from app.config import settings
 from app.db import get_pool
 from app.deps import get_current_user_id
+from app.secrets import encrypt_secret
+from app.telegram_client import TelegramAPIError, get_me, set_webhook
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/flows/{flow_id}/triggers", tags=["triggers"])
 
-TriggerKind = Literal["manual", "webhook", "schedule", "agent_event"]
+TriggerKind = Literal["manual", "webhook", "schedule", "agent_event", "telegram"]
 RunStatus = Literal["succeeded", "failed", "budget_exceeded"]
 
 
@@ -52,12 +65,18 @@ class TriggerCreate(BaseModel):
     source_agent_id: UUID | None = None
     source_flow_id: UUID | None = None
     on_status: RunStatus = "succeeded"
+    # telegram only: the bot's token (from @BotFather), validated against Telegram's own
+    # getMe at create time and never returned by any endpoint afterward -- same "sent
+    # once, never shown again" posture tool credentials already have.
+    bot_token: str | None = None
 
     @model_validator(mode="after")
     def _agent_event_source(self) -> "TriggerCreate":
         if self.kind == "agent_event":
             if (self.source_agent_id is None) == (self.source_flow_id is None):
                 raise ValueError("agent_event triggers need exactly one of source_agent_id or source_flow_id")
+        if self.kind == "telegram" and not self.bot_token:
+            raise ValueError("telegram triggers require a bot_token")
         return self
 
 
@@ -140,24 +159,58 @@ async def create_trigger(
         config = {"secret": secrets.token_urlsafe(32)}
     elif body.kind == "agent_event":
         config = None  # resolved below, once we're holding a connection to validate against
+    elif body.kind == "telegram":
+        if not settings.api_public_url:
+            raise HTTPException(
+                status_code=501, detail="Telegram triggers aren't available on this deployment"
+            )
+        config = None  # resolved below -- needs this trigger's own id first (webhook URL)
     else:
         config = {}
+
+    # Generated here, not left to the table's own `default gen_random_uuid()`, so a
+    # telegram trigger's webhook URL (https://.../webhooks/telegram/{trigger_id}) is known
+    # *before* the insert -- Telegram's own setWebhook call needs it, and there's no
+    # "insert, then go back and register the URL" two-step this way. Every kind gets its
+    # id assigned the same way, rather than branching the insert itself by kind.
+    trigger_id = uuid4()
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         await _get_flow_or_404(conn, workspace_id, flow_id)
-        if config is None:
+        if body.kind == "agent_event":
             config = await _resolve_agent_event_config(conn, workspace_id=workspace_id, flow_id=flow_id, body=body)
-        row = await conn.fetchrow(
-            """
-            insert into triggers (flow_id, kind, config)
-            values ($1, $2, $3)
-            returning id, kind, config, enabled, last_fired_at, created_at
-            """,
-            flow_id,
-            body.kind,
-            config,
-        )
+        elif body.kind == "telegram":
+            try:
+                bot_info = await get_me(body.bot_token)
+            except TelegramAPIError as exc:
+                raise HTTPException(status_code=400, detail=f"invalid Telegram bot token: {exc}") from None
+            webhook_secret = secrets.token_urlsafe(32)
+            webhook_url = f"{settings.api_public_url}/webhooks/telegram/{trigger_id}"
+            try:
+                await set_webhook(body.bot_token, webhook_url, webhook_secret)
+            except TelegramAPIError as exc:
+                raise HTTPException(status_code=502, detail=f"Telegram setWebhook failed: {exc}") from None
+            config = {"bot_username": bot_info.get("username"), "webhook_secret": webhook_secret}
+
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                insert into triggers (id, flow_id, kind, config)
+                values ($1, $2, $3, $4)
+                returning id, kind, config, enabled, last_fired_at, created_at
+                """,
+                trigger_id,
+                flow_id,
+                body.kind,
+                config,
+            )
+            if body.kind == "telegram":
+                await conn.execute(
+                    "insert into trigger_credential_secrets (trigger_id, secret_encrypted) values ($1, $2)",
+                    trigger_id,
+                    encrypt_secret(body.bot_token),
+                )
     return TriggerOut(**dict(row))
 
 
@@ -216,6 +269,14 @@ async def delete_trigger(
     # returns JSON, and the frontend's `unwrap` helper (lib/api.ts) treats an
     # empty body as an error, so this keeps DELETE on the same footing as
     # everything else instead of being the one call site that has to special-case it.
+    #
+    # Known gap, deliberately not closed here: deleting a telegram trigger doesn't call
+    # Telegram's own deleteWebhook first (this API's own secrets.py only ever *encrypts* --
+    # it has no decrypt_secret, by design, mirroring the orchestrator-only-decrypts split
+    # tool credentials already use -- so reaching the bot token to make that call would mean
+    # breaking that split for one cleanup call). Telegram will keep POSTing to a now-404ing
+    # URL and back off/disable the webhook itself after enough consecutive failures --
+    # harmless, just not instant.
     pool = await get_pool()
     async with pool.acquire() as conn:
         await _get_flow_or_404(conn, workspace_id, flow_id)

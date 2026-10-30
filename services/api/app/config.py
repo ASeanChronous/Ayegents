@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     # a flat cents amount, not a rate). A deliberate product/business number, not something
     # to change casually — see routers/payments.py's own docstring for the reasoning.
     platform_fee_bps: int = 1500
+    # This API's own publicly-reachable origin (routers/telegram.py) -- Telegram's
+    # setWebhook call needs a real URL it can POST to from the outside, which is a
+    # different thing from frontend_url (where a human's browser lives) and can't be
+    # inferred from an incoming request the way cors_allowed_origins can. Optional like
+    # the Stripe settings: a deployment that never connects a Telegram trigger just gets
+    # a 501 from that endpoint instead of failing to boot.
+    api_public_url: str | None = None
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:

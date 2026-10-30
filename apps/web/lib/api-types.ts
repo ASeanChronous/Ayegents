@@ -626,6 +626,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/telegram/{trigger_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fire Telegram Webhook */
+        post: operations["fire_telegram_webhook_webhooks_telegram__trigger_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1223,7 +1240,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "manual" | "webhook" | "schedule" | "agent_event";
+            kind: "manual" | "webhook" | "schedule" | "agent_event" | "telegram";
             /** Cron */
             cron?: string | null;
             /** Source Agent Id */
@@ -1236,6 +1253,8 @@ export interface components {
              * @enum {string}
              */
             on_status: "succeeded" | "failed" | "budget_exceeded";
+            /** Bot Token */
+            bot_token?: string | null;
         };
         /** TriggerOut */
         TriggerOut: {
@@ -1248,7 +1267,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "manual" | "webhook" | "schedule" | "agent_event";
+            kind: "manual" | "webhook" | "schedule" | "agent_event" | "telegram";
             /** Config */
             config: {
                 [key: string]: unknown;
@@ -2764,6 +2783,39 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fire_telegram_webhook_webhooks_telegram__trigger_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Telegram-Bot-Api-Secret-Token"?: string | null;
+            };
+            path: {
+                trigger_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
