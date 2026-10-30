@@ -13,7 +13,7 @@ import { api, unwrap, ApiError } from "@/lib/api";
 import { FormDrawer } from "@/components/FormDrawer";
 import { Badge } from "@/components/Badge";
 
-type TriggerKind = "manual" | "webhook" | "schedule" | "agent_event" | "telegram";
+type TriggerKind = "manual" | "webhook" | "schedule" | "agent_event" | "telegram" | "slack";
 
 type Trigger = {
   id: string;
@@ -27,12 +27,13 @@ type Trigger = {
 type Agent = { id: string; name: string };
 type Flow = { id: string; name: string };
 
-const KIND_TONE: Record<TriggerKind, "gray" | "blue" | "green" | "yellow" | "red"> = {
+const KIND_TONE: Record<TriggerKind, "gray" | "blue" | "green" | "yellow" | "red" | "purple"> = {
   manual: "gray",
   webhook: "blue",
   schedule: "green",
   agent_event: "yellow",
   telegram: "red",
+  slack: "purple",
 };
 
 const ON_STATUS_OPTIONS = ["succeeded", "failed", "budget_exceeded"] as const;
@@ -70,14 +71,15 @@ export function TriggersDrawer({
   );
 
   const [adding, setAdding] = useState(false);
-  const [addKind, setAddKind] = useState<"webhook" | "schedule" | "agent_event" | "telegram">("webhook");
+  const [addKind, setAddKind] = useState<"webhook" | "schedule" | "agent_event" | "telegram" | "slack">("webhook");
   const [cron, setCron] = useState("0 * * * *");
   // agent_event fields -- sourceType picks which half of the union
   // (source_agent_id vs. source_flow_id) the form is filling in.
   const [sourceType, setSourceType] = useState<"agent" | "flow">("agent");
   const [sourceId, setSourceId] = useState("");
   const [onStatus, setOnStatus] = useState<(typeof ON_STATUS_OPTIONS)[number]>("succeeded");
-  const [botToken, setBotToken] = useState("");
+  const [botToken, setBotToken] = useState(""); // telegram and slack
+  const [signingSecret, setSigningSecret] = useState(""); // slack only
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -108,7 +110,9 @@ export function TriggersDrawer({
               }
             : addKind === "telegram"
               ? { kind: "telegram" as const, on_status: onStatus, bot_token: botToken }
-              : { kind: "webhook" as const, on_status: onStatus };
+              : addKind === "slack"
+                ? { kind: "slack" as const, on_status: onStatus, bot_token: botToken, signing_secret: signingSecret }
+                : { kind: "webhook" as const, on_status: onStatus };
       await unwrap(
         api.POST("/workspaces/{workspace_id}/flows/{flow_id}/triggers", {
           params: { path: { workspace_id: workspaceId, flow_id: flowId } },
@@ -118,6 +122,7 @@ export function TriggersDrawer({
       setAdding(false);
       setSourceId("");
       setBotToken("");
+      setSigningSecret("");
       await mutate();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to create trigger");
@@ -169,7 +174,7 @@ export function TriggersDrawer({
       <div className="space-y-4">
         <p className="text-sm text-gray-500">
           Starts this flow without opening the app — a webhook POST, a cron schedule, another agent/flow's run
-          finishing, or a Telegram message, on top of starting it manually from the Runs page.
+          finishing, or a Telegram/Slack message, on top of starting it manually from the Runs page.
         </p>
         {actionError && <p className="text-sm text-red-600">{actionError}</p>}
 
@@ -234,6 +239,15 @@ export function TriggersDrawer({
                 }`}
               >
                 Telegram
+              </button>
+              <button
+                type="button"
+                onClick={() => setAddKind("slack")}
+                className={`flex-1 rounded-md border px-2 py-1 ${
+                  addKind === "slack" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-700"
+                }`}
+              >
+                Slack
               </button>
             </div>
             {addKind === "schedule" && (
@@ -360,6 +374,60 @@ export function TriggersDrawer({
                 </div>
               </div>
             )}
+            {addKind === "slack" && (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">
+                  Starts this flow when a message is sent in a channel your Slack bot is in — the run's result is
+                  posted back to that channel. Create a custom app at{" "}
+                  <a
+                    href="https://api.slack.com/apps"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    api.slack.com/apps
+                  </a>
+                  , add the <code className="rounded bg-gray-100 px-1 py-0.5">chat:write</code> and{" "}
+                  <code className="rounded bg-gray-100 px-1 py-0.5">channels:history</code> bot scopes, install it
+                  to your workspace, then paste the Bot User OAuth Token and the app&apos;s Signing Secret below.
+                  Unlike Telegram, there&apos;s one more manual step after this: Slack has no way for us to
+                  register a URL automatically, so once this trigger is created you&apos;ll need to paste its
+                  webhook URL into your Slack app&apos;s Event Subscriptions page yourself (shown on the trigger
+                  once added).
+                </p>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700" htmlFor="trigger-slack-bot-token">
+                    Bot User OAuth Token
+                  </label>
+                  <input
+                    id="trigger-slack-bot-token"
+                    type="password"
+                    required
+                    value={botToken}
+                    onChange={(e) => setBotToken(e.target.value)}
+                    placeholder="xoxb-…"
+                    className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm focus:border-gray-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700" htmlFor="trigger-slack-signing-secret">
+                    Signing Secret
+                  </label>
+                  <input
+                    id="trigger-slack-signing-secret"
+                    type="password"
+                    required
+                    value={signingSecret}
+                    onChange={(e) => setSigningSecret(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm focus:border-gray-500 focus:outline-none"
+                  />
+                  <p className="mt-1 text-xs text-gray-400">
+                    Both verified against Slack; the bot token is encrypted immediately and never shown again (your
+                    Slack app&apos;s own dashboard still has your signing secret if you need it later).
+                  </p>
+                </div>
+              </div>
+            )}
             {error && <p className="text-sm text-red-600">{error}</p>}
             <div className="flex gap-2">
               <button
@@ -406,12 +474,14 @@ function TriggerRow({
 }) {
   const [revealSecret, setRevealSecret] = useState(false);
   const webhookUrl = `${apiBaseUrl}/webhooks/${trigger.id}`;
+  const slackWebhookUrl = `${apiBaseUrl}/webhooks/slack/${trigger.id}`;
   const secret = typeof trigger.config.secret === "string" ? trigger.config.secret : null;
   const cron = typeof trigger.config.cron === "string" ? trigger.config.cron : null;
   const sourceAgentId = typeof trigger.config.source_agent_id === "string" ? trigger.config.source_agent_id : null;
   const sourceFlowId = typeof trigger.config.source_flow_id === "string" ? trigger.config.source_flow_id : null;
   const onStatus = typeof trigger.config.on_status === "string" ? trigger.config.on_status : null;
   const botUsername = typeof trigger.config.bot_username === "string" ? trigger.config.bot_username : null;
+  const slackTeam = typeof trigger.config.team === "string" ? trigger.config.team : null;
   const sourceName = sourceAgentId
     ? agents?.find((a) => a.id === sourceAgentId)?.name ?? sourceAgentId.slice(0, 8)
     : sourceFlowId
@@ -471,6 +541,21 @@ function TriggerRow({
           bot to start this flow
           {" — "}
           {trigger.last_fired_at ? `last fired ${new Date(trigger.last_fired_at).toLocaleString()}` : "never fired yet"}
+        </div>
+      )}
+      {trigger.kind === "slack" && (
+        <div className="space-y-1 text-xs">
+          <div className="text-gray-500">
+            Connected to <span className="font-medium text-gray-700">{slackTeam ?? "unknown workspace"}</span> —
+            message the bot in a channel it's in to start this flow.
+          </div>
+          <div>
+            <span className="text-gray-500">Paste into your Slack app's Event Subscriptions Request URL: </span>
+            <code className="break-all rounded bg-gray-100 px-1 py-0.5">{slackWebhookUrl}</code>
+          </div>
+          <div className="text-gray-500">
+            {trigger.last_fired_at ? `last fired ${new Date(trigger.last_fired_at).toLocaleString()}` : "never fired yet"}
+          </div>
         </div>
       )}
     </li>

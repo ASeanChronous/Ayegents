@@ -993,3 +993,89 @@ instead of a raw exception.
 
 `tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests, unaffected)
 all clean.
+
+### Slack trigger (second chat-platform integration)
+
+**Done.** The second chat-platform trigger, same shape as Telegram: a message posted in a
+channel a connected Slack bot is in starts a flow run, and the run's result is posted back
+to that channel once it finishes. Same "bring your own bot" scope line Telegram drew (a
+custom Slack App per workspace, not a shared multi-tenant OAuth app) -- see `triggers.py`'s
+own docstring for why.
+
+The one real difference from Telegram, surfaced honestly rather than papered over: Slack has
+no equivalent of `setWebhook`. A custom Slack App's Event Subscriptions "Request URL" is
+configured by hand, in Slack's own dashboard, by whoever owns that App -- there's no API
+call this server can make to register it automatically. So creating a slack trigger here
+only validates the bot token and stores it; the user still has to copy this trigger's
+webhook URL (shown on the trigger row once created, same as a generic webhook trigger
+already shows its own URL) and paste it into their Slack App's Event Subscriptions page
+themselves. Slack then immediately sends a `url_verification` challenge to confirm the URL
+is real and listening, which the handler has to answer correctly before Slack will accept
+the URL at all.
+
+Design:
+- Reuses `trigger_credential_secrets` as-is (migration `0011_slack_trigger.sql` is just the
+  new enum value) -- the table was already generic (one encrypted credential per
+  `trigger_id`), so Slack's Bot User OAuth Token (`xoxb-...`) slots in next to Telegram's bot
+  token with no schema change. `config.signing_secret` -- the Slack App's own Signing Secret,
+  pasted in by the user -- stays in plain `config`, same lower-threat-tier reasoning the
+  module docstring already gives for Telegram's `webhook_secret`: it only lets someone forge
+  a fake event to *this* trigger, not impersonate the bot anywhere else on Slack, which is
+  what the bot token itself would allow.
+- `services/api/app/slack_client.py` (new) -- a thin, SDK-free Slack Web API client
+  (`auth.test` only, used at create time to validate the token and learn the bot's own
+  `team`/`user_id`). Mirrors `orchestrator_app/slack_reply.py`'s own thin client
+  (`chat.postMessage`, the reply side), the same encrypt-on-API/decrypt-on-orchestrator split
+  every credential in this project uses, and the same shape `telegram_client.py`/
+  `telegram_reply.py` already established.
+- `auth.test`'s `user_id` (the bot's own Slack user id) is stored as `config.bot_user_id` and
+  is the key piece that makes this safe to actually turn on: without filtering it back out of
+  incoming events, a flow that posts its own reply into the same channel it listens on would
+  trigger itself on its own message, forever. `POST /webhooks/slack/{trigger_id}`
+  (`webhooks.py`) drops any event carrying a `bot_id` (any bot's message, not just this one)
+  *or* whose `user` matches `bot_user_id` -- belt and suspenders, since Slack's own event
+  shape doesn't always guarantee `bot_id` is present on every kind of bot-originated message.
+- Signature verification is Slack's own documented scheme, not reused from anywhere else in
+  this project (Stripe and Telegram each verify differently) -- HMAC-SHA256 of
+  `v0:{timestamp}:{raw body}` keyed by `signing_secret`, compared in constant time against
+  `X-Slack-Signature`, plus a 5-minute replay window against `X-Slack-Request-Timestamp`
+  (Slack's own recommended tolerance). Checked before the body is even parsed as JSON, and
+  before the `url_verification` handshake is answered -- Slack signs that request too, so
+  there's no special-cased unverified path.
+- Slack retries a delivery that doesn't get a prompt 200, same as Telegram, with one
+  Slack-specific wrinkle: it also sends `X-Slack-Retry-Num` on a retry. Rather than risk a
+  duplicate run from processing the same event twice, a retried delivery is ack'd
+  immediately without being processed at all, trusting that the original attempt already
+  succeeded (Slack's own documented recommendation, not an invented heuristic).
+- Frontend (`TriggersDrawer.tsx`): a fifth add-trigger tab, "Slack," always offered. Two
+  password-type fields (Bot User OAuth Token, Signing Secret) with inline setup instructions
+  -- including, explicitly, the one extra manual step Telegram doesn't need. Badge needed a
+  sixth tone (`purple`, added to `Badge.tsx`) since the existing five were all already
+  spoken for by the other trigger kinds. An existing slack trigger's row shows its connected
+  team name and, prominently, the webhook URL to paste into Slack's dashboard -- the one
+  piece of information the user actually needs to come back for after creating it.
+
+Verified against the real Docker Postgres + API + orchestrator stack, Slack's `auth.test`
+call mocked at create time (no real Slack App to test against) but **signature verification
+itself was never mocked** -- every webhook request in the test suite below is signed for
+real using a known signing secret, exercising the actual HMAC code end to end, the same way
+Telegram's real `getMe` rejection was exercised unmocked for that trigger. Via an in-process
+ASGI client: created a trigger, confirmed `config.team`/`bot_user_id` were set and the bot
+token never appeared in any API response, confirmed it was stored encrypted; sent a
+correctly-signed `url_verification` request and confirmed the exact challenge was echoed
+back; sent a request with a deliberately wrong signature (404) and one with a 1000-second-old
+timestamp (404, replay window); sent a real signed message event and confirmed a run was
+created with the exact expected `input`; sent a bot-authored event via `bot_id` and,
+separately, one whose `user` matched the bot's own `bot_user_id` with no `bot_id` field at
+all, and confirmed neither created a new run (the loop-prevention check, both paths); sent a
+retried delivery (`X-Slack-Retry-Num` set) and confirmed no duplicate run. Then ran the real
+orchestrator (Anthropic client mocked) against this exact trigger/flow: a successful run
+called `chat.postMessage` with the decrypted bot token, the right channel, and the agent's
+reply; an engineered failure confirmed the `"⚠️ <error>"` failure-path reply. Finally, in a
+real browser: created a workspace and a flow, opened Triggers, confirmed the "Slack" tab and
+its full setup instructions render (including the Telegram-vs-Slack difference called out
+explicitly), filled in a bot token and signing secret and submitted, and confirmed the real
+Slack rejection ("invalid Slack bot token: invalid_auth") rendered cleanly in the form.
+
+`tsc --noEmit`, `npm run build` (13 routes, unchanged), and `npm test` (9 tests, unaffected)
+all clean.

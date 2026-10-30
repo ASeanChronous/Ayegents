@@ -25,9 +25,13 @@ The condition language ("<node_id>.output.<key...>", optionally prefixed "not ",
 followed by a comparison) can't reference anything but one predecessor's output and has no
 arithmetic -- see `_eval_condition`'s own docstring for the full grammar and reasoning.
 
-A flow started by a telegram trigger gets its result sent back to the chat that triggered it
-once it finishes, success or failure -- see `telegram_reply.reply_if_telegram_triggered`,
-called right alongside `fire_agent_event_triggers` below, same best-effort shape.
+A flow started by a telegram or slack trigger gets its result sent back to the chat/channel
+that triggered it once it finishes, success or failure -- see
+`telegram_reply.reply_if_telegram_triggered`/`slack_reply.reply_if_slack_triggered`, called
+right alongside `fire_agent_event_triggers` below, same best-effort shape. Both are cheap
+no-ops for any run whose trigger isn't that platform (a single `select ... where kind =
+'...'` that comes back empty), so calling both unconditionally on every run is simpler than
+branching on which chat platform (if any) actually triggered it.
 """
 
 import json
@@ -49,6 +53,7 @@ from orchestrator_app.executor import (
     _log_tool_step,
 )
 from orchestrator_app.notify import notify_run
+from orchestrator_app.slack_reply import reply_if_slack_triggered
 from orchestrator_app.telegram_reply import reply_if_telegram_triggered
 from orchestrator_app.tool_gateway import ToolDispatchError, dispatch_tool
 
@@ -168,6 +173,14 @@ async def run_flow(
                 output={"node_outputs": final_state["node_outputs"]},
                 error=None,
             )
+            await reply_if_slack_triggered(
+                conn,
+                trigger_id=run["trigger_id"],
+                run_input=run["input"],
+                status="succeeded",
+                output={"node_outputs": final_state["node_outputs"]},
+                error=None,
+            )
     except Exception as exc:  # noqa: BLE001 — surfaced into the run row, not swallowed
         async with pool.acquire() as conn:
             await conn.execute(
@@ -185,6 +198,9 @@ async def run_flow(
                 conn, source_flow_id=run["flow_id"], status="failed", output=None
             )
             await reply_if_telegram_triggered(
+                conn, trigger_id=run["trigger_id"], run_input=run["input"], status="failed", output=None, error=str(exc)
+            )
+            await reply_if_slack_triggered(
                 conn, trigger_id=run["trigger_id"], run_input=run["input"], status="failed", output=None, error=str(exc)
             )
 

@@ -643,6 +643,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/slack/{trigger_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fire Slack Webhook */
+        post: operations["fire_slack_webhook_webhooks_slack__trigger_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1240,7 +1257,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "manual" | "webhook" | "schedule" | "agent_event" | "telegram";
+            kind: "manual" | "webhook" | "schedule" | "agent_event" | "telegram" | "slack";
             /** Cron */
             cron?: string | null;
             /** Source Agent Id */
@@ -1255,6 +1272,8 @@ export interface components {
             on_status: "succeeded" | "failed" | "budget_exceeded";
             /** Bot Token */
             bot_token?: string | null;
+            /** Signing Secret */
+            signing_secret?: string | null;
         };
         /** TriggerOut */
         TriggerOut: {
@@ -1267,7 +1286,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "manual" | "webhook" | "schedule" | "agent_event" | "telegram";
+            kind: "manual" | "webhook" | "schedule" | "agent_event" | "telegram" | "slack";
             /** Config */
             config: {
                 [key: string]: unknown;
@@ -2806,6 +2825,41 @@ export interface operations {
             query?: never;
             header?: {
                 "X-Telegram-Bot-Api-Secret-Token"?: string | null;
+            };
+            path: {
+                trigger_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fire_slack_webhook_webhooks_slack__trigger_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Slack-Signature"?: string | null;
+                "X-Slack-Request-Timestamp"?: string | null;
+                "X-Slack-Retry-Num"?: string | null;
             };
             path: {
                 trigger_id: string;
