@@ -18,10 +18,15 @@ left for later, not an oversight. A cycle would show up immediately as runs pili
 Runs list, not silently -- the operator's own "disable this trigger" lever already handles it.
 """
 
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
 import asyncpg
+
+from orchestrator_app.limits import daily_run_budget_exceeded
+
+log = logging.getLogger("orchestrator.agent_event")
 
 
 async def fire_agent_event_triggers(
@@ -61,6 +66,23 @@ async def fire_agent_event_triggers(
     now = datetime.now(timezone.utc)
 
     for trigger in rows:
+        # Same daily cap every other way of starting a run already enforces
+        # (app/limits.py, routers/webhooks.py, scheduler.py) -- there's no human or
+        # external caller here either to turn away, and this is also the one backstop
+        # the module docstring's own "known, deliberate scope cut" (an undetected A->B->A
+        # trigger cycle) didn't have before: without this, a cycle wasn't just "runs
+        # piling up for an operator to notice," it was unbounded runs with nothing to stop
+        # them until an operator did. Not updating last_fired_at on skip, same reasoning
+        # as scheduler.py -- this firing is simply dropped, not deferred, since there's no
+        # "next due time" concept for an event trigger the way there is for a cron one.
+        if await daily_run_budget_exceeded(conn, trigger["workspace_id"]):
+            log.info(
+                "agent_event trigger %s skipped: workspace %s is over its daily run budget",
+                trigger["id"],
+                trigger["workspace_id"],
+            )
+            continue
+
         run = await conn.fetchrow(
             """
             insert into runs (workspace_id, flow_id, trigger_id, input, status)

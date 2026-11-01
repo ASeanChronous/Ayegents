@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 import asyncpg
 from croniter import croniter
 
+from orchestrator_app.limits import daily_run_budget_exceeded
+
 log = logging.getLogger("orchestrator.scheduler")
 
 
@@ -45,6 +47,22 @@ async def fire_due_triggers(pool: asyncpg.Pool) -> None:
                     continue
                 base = trigger["last_fired_at"] or trigger["created_at"]
                 if not _is_due(cron, base, now):
+                    continue
+
+                # Same daily cap every other way of starting a run already enforces
+                # (app/limits.py, routers/webhooks.py) -- a schedule trigger has no human
+                # or external caller to turn away, so without this a tight cron (every
+                # minute, say) would blow straight through the workspace's plan for free,
+                # forever, with nobody even having to try. Deliberately not updating
+                # last_fired_at here -- this tick stays "due" and gets retried next poll,
+                # firing as soon as the rolling 24h window frees up, rather than silently
+                # skipping a scheduled fire and moving on.
+                if await daily_run_budget_exceeded(conn, trigger["workspace_id"]):
+                    log.info(
+                        "schedule trigger %s due but workspace %s is over its daily run budget, skipping",
+                        trigger["id"],
+                        trigger["workspace_id"],
+                    )
                     continue
 
                 run = await conn.fetchrow(
