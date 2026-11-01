@@ -220,11 +220,38 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Credentials
+         * @description The secret itself is never returned here, or anywhere -- `CredentialCreate.secret`
+         *     is 'sent once; never stored or returned as-is' by design, and this list exists so
+         *     that promise doesn't also mean invisible: before this, the only way to know a
+         *     credential existed at all was to remember creating it. `_load_credential_secret`
+         *     (tool_gateway.py) already always uses the most recently created row for a given
+         *     `(tool_id, workspace_id)`, so creating a new credential silently "rotates" which one
+         *     is live -- every older one just sat there, visible to nobody, deletable by nobody.
+         */
+        get: operations["list_credentials_workspaces__workspace_id__tools__tool_id__credentials_get"];
         put?: never;
         /** Create Credential */
         post: operations["create_credential_workspaces__workspace_id__tools__tool_id__credentials_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspace_id}/tools/{tool_id}/credentials/{credential_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Credential */
+        delete: operations["delete_credential_workspaces__workspace_id__tools__tool_id__credentials__credential_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -938,6 +965,21 @@ export interface components {
             label: string;
             /** Secret */
             secret: string;
+        };
+        /** CredentialListItemOut */
+        CredentialListItemOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** CredentialOut */
         CredentialOut: {
@@ -2369,6 +2411,38 @@ export interface operations {
             };
         };
     };
+    list_credentials_workspaces__workspace_id__tools__tool_id__credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                tool_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialListItemOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_credential_workspaces__workspace_id__tools__tool_id__credentials_post: {
         parameters: {
             query?: never;
@@ -2392,6 +2466,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_credential_workspaces__workspace_id__tools__tool_id__credentials__credential_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                tool_id: string;
+                credential_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteOut"];
                 };
             };
             /** @description Validation Error */

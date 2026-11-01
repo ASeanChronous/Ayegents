@@ -91,7 +91,7 @@ export default function ToolsPage() {
               render: (t) =>
                 t.requires_credential ? (
                   <button onClick={() => setCredentialTool(t)} className="text-xs font-medium text-blue-600 hover:underline">
-                    Add credential
+                    Manage credentials
                   </button>
                 ) : null,
             },
@@ -266,8 +266,24 @@ function CredentialDrawer({
   const [label, setLabel] = useState("");
   const [secret, setSecret] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const { data: credentials, mutate: refreshCredentials } = useSWR(
+    `/workspaces/${workspaceId}/tools/${tool.id}/credentials`,
+    () =>
+      unwrap(
+        api.GET("/workspaces/{workspace_id}/tools/{tool_id}/credentials", {
+          params: { path: { workspace_id: workspaceId, tool_id: tool.id } },
+        })
+      )
+  );
+
+  // _load_credential_secret (tool_gateway.py) always uses the most recently
+  // created row for this tool -- the first item here, since the list comes
+  // back newest-first -- so every call this agent makes right now is using
+  // exactly this one, and every other row below it is dead weight nobody
+  // can see is dead without this label.
+  const liveCredentialId = credentials?.[0]?.id;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -280,7 +296,9 @@ function CredentialDrawer({
           body: { label, secret },
         })
       );
-      setSuccess(true);
+      setLabel("");
+      setSecret("");
+      await refreshCredentials();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to add credential");
     } finally {
@@ -288,14 +306,49 @@ function CredentialDrawer({
     }
   }
 
+  async function handleDelete(credentialId: string) {
+    if (!confirm("Delete this credential? Any tool call still relying on it will start failing.")) return;
+    try {
+      await unwrap(
+        api.DELETE("/workspaces/{workspace_id}/tools/{tool_id}/credentials/{credential_id}", {
+          params: { path: { workspace_id: workspaceId, tool_id: tool.id, credential_id: credentialId } },
+        })
+      );
+      await refreshCredentials();
+    } catch (e) {
+      alert(e instanceof ApiError ? e.message : "Failed to delete credential");
+    }
+  }
+
   return (
-    <FormDrawer open onClose={onClose} title={`Add credential — ${tool.name}`}>
-      {success ? (
-        <p className="text-sm text-green-700">
-          Credential added. It&apos;s encrypted at rest and only the orchestrator can read it.
-        </p>
-      ) : (
-        <form onSubmit={handleSubmit} className="space-y-4">
+    <FormDrawer open onClose={onClose} title={`Credentials — ${tool.name}`}>
+      <div className="space-y-6">
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-gray-700">Existing credentials</h3>
+          {credentials && credentials.length === 0 && (
+            <p className="text-xs text-gray-500">None yet — add one below.</p>
+          )}
+          {credentials?.map((c) => (
+            <div key={c.id} className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm">
+              <div>
+                <span className="font-medium">{c.label}</span>
+                {c.id === liveCredentialId && (
+                  <span className="ml-2 text-xs text-green-700">● in use</span>
+                )}
+                <p className="text-xs text-gray-400">{new Date(c.created_at).toLocaleString()}</p>
+              </div>
+              <button onClick={() => handleDelete(c.id)} className="text-xs font-medium text-red-600 hover:underline">
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4 border-t border-gray-200 pt-4">
+          <h3 className="text-sm font-medium text-gray-700">Add a new credential</h3>
+          <p className="text-xs text-gray-500">
+            The newest credential is always the one tool calls use — adding one here effectively rotates it.
+          </p>
           <div>
             <label className="block text-sm font-medium text-gray-700" htmlFor="cred-label">
               Label
@@ -334,7 +387,7 @@ function CredentialDrawer({
             {submitting ? "Saving…" : "Save credential"}
           </button>
         </form>
-      )}
+      </div>
     </FormDrawer>
   );
 }
