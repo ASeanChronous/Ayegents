@@ -197,13 +197,24 @@ async def _execute_agent_loop(
             # durations.
             started = time.monotonic()
             started_at = datetime.now(timezone.utc)
-            response = await client.messages.create(
-                model=model_id,
-                max_tokens=4096,
-                system=agent_version["system_prompt"],
-                messages=messages,
-                tools=tool_defs or None,
-            )
+            # The `tools` kwarg has to be *omitted* for a tool-less agent, not passed as
+            # `None` -- the Anthropic SDK serializes an explicit `tools=None` as a literal
+            # `"tools": null` in the request body, which the real API rejects outright
+            # ("tools: Input should be a valid array"). This went uncaught through every
+            # prior Docker verification pass in this project because every one of them
+            # mocked `client.messages.create` itself, which never validated its kwargs
+            # against Anthropic's actual request schema -- only a real, unmocked call (an
+            # agent-as-tool delegation to a sub-agent with no tools of its own, which is
+            # the common case) surfaced it.
+            create_kwargs: dict = {
+                "model": model_id,
+                "max_tokens": 4096,
+                "system": agent_version["system_prompt"],
+                "messages": messages,
+            }
+            if tool_defs:
+                create_kwargs["tools"] = tool_defs
+            response = await client.messages.create(**create_kwargs)
             latency_ms = int((time.monotonic() - started) * 1000)
             finished_at = datetime.now(timezone.utc)
             total_tokens += response.usage.input_tokens + response.usage.output_tokens

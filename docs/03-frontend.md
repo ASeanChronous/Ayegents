@@ -325,6 +325,42 @@ all clean.
    sub-agent, confirmed the self-reference and cross-workspace rejections, then in a real
    browser reproduced the exact prefill-then-republish sequence that had failed before the fix
    and confirmed it now succeeds (`v3` published cleanly).
+
+   **Second bug, found much later, during live user testing with a real `ANTHROPIC_API_KEY`
+   rather than any Docker-mocked pass.** Every agent-as-tool delegation to a sub-agent with no
+   tools of its own — the common case — failed outright against the real Anthropic API, while
+   every one of this feature's own prior verification passes (including the one just above)
+   had reported it working. `executor.py`'s `_execute_agent_loop` built its
+   `client.messages.create(...)` call with `tools=tool_defs or None`: when `tool_defs` was
+   empty, this sends a literal `"tools": null` in the request body. The real API rejects that
+   outright (`400 invalid_request_error: tools: Input should be a valid array`); the Anthropic
+   Python SDK does not strip a `None` value before serializing. Every prior test in this
+   project's history mocked `client.messages.create` directly, so nothing ever validated the
+   actual kwargs against Anthropic's real schema — this was the first genuinely unmocked,
+   real multi-step execution anywhere in the project, run specifically because the user asked
+   to click through real agent delegation themselves rather than take another mocked pass on
+   faith.
+
+   Fixed by building the kwargs as a dict and only including `tools` at all when `tool_defs`
+   is non-empty, instead of passing it unconditionally:
+   ```python
+   create_kwargs: dict = {
+       "model": model_id,
+       "max_tokens": 4096,
+       "system": agent_version["system_prompt"],
+       "messages": messages,
+   }
+   if tool_defs:
+       create_kwargs["tools"] = tool_defs
+   response = await client.messages.create(**create_kwargs)
+   ```
+   Verified live against the real Anthropic API, not mocked: a three-agent scenario (a Trip
+   Planner manager delegating to a tool-less Weather Scout and a tool-less Itinerary Writer)
+   was run twice. Before the fix, the top-level run succeeded but both sub-agent delegations
+   failed with the exact `tools: null` error above. After the fix, with no other change, the
+   same run succeeded end to end — both depth-1 sub-agent calls completed and the manager
+   produced a correct, coherent synthesized answer (5999 tokens total, $0.06) — confirming the
+   fix and nothing else in the delegation path was at fault.
 5. **Done.** `/runs`: run list (agent name, status badge, tokens, started time) and a
    start-a-run drawer (pick an agent, JSON input). `/runs/[id]`: run inspector — status
    badge, input/output JSON panels, total tokens, finished time, and an expandable
