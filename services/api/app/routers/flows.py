@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.db import get_pool
-from app.deps import get_current_user_id
+from app.deps import require_workspace_member
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/flows", tags=["flows"])
 
@@ -22,7 +22,7 @@ class FlowOut(BaseModel):
 
 
 @router.get("", response_model=list[FlowOut])
-async def list_flows(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def list_flows(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     rows = await pool.fetch(
         "select id, name, status from flows where workspace_id = $1 order by created_at desc",
@@ -32,7 +32,7 @@ async def list_flows(workspace_id: UUID, user_id: UUID = Depends(get_current_use
 
 
 @router.get("/{flow_id}", response_model=FlowOut)
-async def get_flow(workspace_id: UUID, flow_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def get_flow(workspace_id: UUID, flow_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     row = await pool.fetchrow(
         "select id, name, status from flows where id = $1 and workspace_id = $2",
@@ -45,7 +45,7 @@ async def get_flow(workspace_id: UUID, flow_id: UUID, user_id: UUID = Depends(ge
 
 
 @router.post("", response_model=FlowOut, status_code=201)
-async def create_flow(workspace_id: UUID, body: FlowCreate, user_id: UUID = Depends(get_current_user_id)):
+async def create_flow(workspace_id: UUID, body: FlowCreate, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     row = await pool.fetchrow(
         """
@@ -114,7 +114,7 @@ class FlowVersionDetailOut(BaseModel):
 
 @router.get("/{flow_id}/versions", response_model=list[FlowVersionDetailOut])
 async def list_flow_versions(
-    workspace_id: UUID, flow_id: UUID, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, flow_id: UUID, user_id: UUID = Depends(require_workspace_member)
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -136,7 +136,7 @@ async def create_flow_version(
     workspace_id: UUID,
     flow_id: UUID,
     body: FlowVersionCreate,
-    user_id: UUID = Depends(get_current_user_id),
+    user_id: UUID = Depends(require_workspace_member),
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:

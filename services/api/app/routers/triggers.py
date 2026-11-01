@@ -55,7 +55,7 @@ from pydantic import BaseModel, model_validator
 
 from app.config import settings
 from app.db import get_pool
-from app.deps import get_current_user_id
+from app.deps import require_workspace_member
 from app.secrets import encrypt_secret
 from app.slack_client import SlackAPIError, auth_test
 from app.telegram_client import TelegramAPIError, get_me, set_webhook
@@ -151,7 +151,7 @@ async def _resolve_agent_event_config(conn, *, workspace_id: UUID, flow_id: UUID
 
 
 @router.get("", response_model=list[TriggerOut])
-async def list_triggers(workspace_id: UUID, flow_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def list_triggers(workspace_id: UUID, flow_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     async with pool.acquire() as conn:
         await _get_flow_or_404(conn, workspace_id, flow_id)
@@ -167,7 +167,7 @@ async def list_triggers(workspace_id: UUID, flow_id: UUID, user_id: UUID = Depen
 
 @router.post("", response_model=TriggerOut, status_code=201)
 async def create_trigger(
-    workspace_id: UUID, flow_id: UUID, body: TriggerCreate, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, flow_id: UUID, body: TriggerCreate, user_id: UUID = Depends(require_workspace_member)
 ):
     config: dict
     if body.kind == "schedule":
@@ -261,7 +261,7 @@ async def update_trigger(
     flow_id: UUID,
     trigger_id: UUID,
     body: TriggerUpdate,
-    user_id: UUID = Depends(get_current_user_id),
+    user_id: UUID = Depends(require_workspace_member),
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -304,7 +304,7 @@ class DeleteOut(BaseModel):
 
 @router.delete("/{trigger_id}", response_model=DeleteOut)
 async def delete_trigger(
-    workspace_id: UUID, flow_id: UUID, trigger_id: UUID, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, flow_id: UUID, trigger_id: UUID, user_id: UUID = Depends(require_workspace_member)
 ):
     # 200 + a small body rather than 204 -- every other endpoint in this API
     # returns JSON, and the frontend's `unwrap` helper (lib/api.ts) treats an

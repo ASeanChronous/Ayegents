@@ -44,7 +44,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.db import get_pool
-from app.deps import get_current_user_id
+from app.deps import require_workspace_member
 
 checkout_router = APIRouter(prefix="/workspaces/{workspace_id}/marketplace/listings", tags=["marketplace"])
 payouts_router = APIRouter(prefix="/workspaces/{workspace_id}/payouts", tags=["marketplace"])
@@ -63,7 +63,7 @@ class CheckoutOut(BaseModel):
 
 @checkout_router.post("/{listing_id}/checkout", response_model=CheckoutOut, status_code=201)
 async def create_checkout_session(
-    workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(require_workspace_member)
 ):
     _require_stripe_configured()
     pool = await get_pool()
@@ -163,7 +163,7 @@ class PurchaseStatusOut(BaseModel):
 
 
 @checkout_router.get("/{listing_id}/purchase", response_model=PurchaseStatusOut)
-async def get_purchase_status(workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def get_purchase_status(workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     """Whether this workspace has a completed purchase of this listing — the
     frontend polls this right after a Checkout redirect-back (the webhook that
     actually flips a purchase to 'paid' races the browser's own redirect, so
@@ -185,7 +185,7 @@ class OnboardingOut(BaseModel):
 
 
 @payouts_router.post("/connect-onboarding", response_model=OnboardingOut, status_code=201)
-async def create_connect_onboarding(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def create_connect_onboarding(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     """Find-or-create this workspace's Express account, then an Account Link (Stripe's
     own hosted onboarding flow — KYC, bank details, tax info, none of it touched by this
     project) pointed back at the marketplace page either way. Safe to call again for a
@@ -231,7 +231,7 @@ class PayoutsStatusOut(BaseModel):
 
 
 @payouts_router.get("/status", response_model=PayoutsStatusOut)
-async def get_payouts_status(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def get_payouts_status(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     """Self-healing, not just a cache read: right after an onboarding redirect-back,
     `workspaces.stripe_connect_payouts_enabled` may not have caught up yet (the
     `account.updated` webhook below races the browser's own redirect, same shape the

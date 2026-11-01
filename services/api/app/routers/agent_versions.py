@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import get_pool
-from app.deps import get_current_user_id
+from app.deps import require_workspace_member
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/agents/{agent_id}/versions", tags=["agents"])
 
@@ -52,7 +52,7 @@ class AgentVersionDetailOut(BaseModel):
 
 @router.get("", response_model=list[AgentVersionDetailOut])
 async def list_agent_versions(
-    workspace_id: UUID, agent_id: UUID, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, agent_id: UUID, user_id: UUID = Depends(require_workspace_member)
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -138,7 +138,7 @@ async def create_agent_version(
     workspace_id: UUID,
     agent_id: UUID,
     body: AgentVersionCreate,
-    user_id: UUID = Depends(get_current_user_id),
+    user_id: UUID = Depends(require_workspace_member),
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:

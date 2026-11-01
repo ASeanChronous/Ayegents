@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.db import get_pool
-from app.deps import get_current_user_id
+from app.deps import require_workspace_member
 from app.secrets import encrypt_secret
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/tools", tags=["tools"])
@@ -33,7 +33,7 @@ class ToolOut(BaseModel):
 
 
 @router.get("", response_model=list[ToolOut])
-async def list_tools(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def list_tools(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     rows = await pool.fetch(
         """
@@ -47,7 +47,7 @@ async def list_tools(workspace_id: UUID, user_id: UUID = Depends(get_current_use
 
 
 @router.post("", response_model=ToolOut, status_code=201)
-async def create_tool(workspace_id: UUID, body: ToolCreate, user_id: UUID = Depends(get_current_user_id)):
+async def create_tool(workspace_id: UUID, body: ToolCreate, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     row = await pool.fetchrow(
         """
@@ -81,7 +81,7 @@ async def create_credential(
     workspace_id: UUID,
     tool_id: UUID,
     body: CredentialCreate,
-    user_id: UUID = Depends(get_current_user_id),
+    user_id: UUID = Depends(require_workspace_member),
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:

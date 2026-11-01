@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.db import get_pool
-from app.deps import get_current_user_id
+from app.deps import require_workspace_member
 from app.routers.flows import FlowSpec
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/runs", tags=["runs"])
@@ -87,7 +87,7 @@ class RunStepOut(BaseModel):
 
 
 @router.get("", response_model=list[RunListItemOut])
-async def list_runs(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def list_runs(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     rows = await pool.fetch(
         """
@@ -104,7 +104,7 @@ async def list_runs(workspace_id: UUID, user_id: UUID = Depends(get_current_user
 
 @router.post("", response_model=RunOut, status_code=201)
 async def create_run(
-    workspace_id: UUID, body: RunCreate, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, body: RunCreate, user_id: UUID = Depends(require_workspace_member)
 ):
     if (body.agent_id is None) == (body.flow_id is None):
         raise HTTPException(status_code=400, detail="exactly one of agent_id or flow_id is required")
@@ -135,7 +135,7 @@ async def create_run(
 
 
 @router.get("/{run_id}", response_model=RunDetailOut)
-async def get_run(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def get_run(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     row = await pool.fetchrow(
         """
@@ -152,7 +152,7 @@ async def get_run(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(get_
 
 
 @router.get("/{run_id}/events")
-async def stream_run_events(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def stream_run_events(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     """Server-Sent Events replacement for the run inspector's old fixed-interval
     polling (docs/03-frontend.md §6), backed by the orchestrator's Postgres
     NOTIFY on the 'run_events' channel (services/orchestrator/orchestrator_app/
@@ -205,7 +205,7 @@ async def stream_run_events(workspace_id: UUID, run_id: UUID, user_id: UUID = De
 
 
 @router.get("/{run_id}/steps", response_model=list[RunStepOut])
-async def list_run_steps(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def list_run_steps(workspace_id: UUID, run_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     # Confirm the run belongs to this workspace before listing its steps —
     # run_steps has no workspace_id column of its own (see docs/02-schema.md

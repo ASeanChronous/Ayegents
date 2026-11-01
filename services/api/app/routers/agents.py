@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import get_pool
-from app.deps import get_current_user_id
+from app.deps import require_workspace_member
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/agents", tags=["agents"])
 
@@ -22,7 +22,7 @@ class AgentOut(BaseModel):
 
 
 @router.get("", response_model=list[AgentOut])
-async def list_agents(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def list_agents(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     rows = await pool.fetch(
         "select id, name, description, status from agents where workspace_id = $1 order by created_at desc",
@@ -32,7 +32,7 @@ async def list_agents(workspace_id: UUID, user_id: UUID = Depends(get_current_us
 
 
 @router.get("/{agent_id}", response_model=AgentOut)
-async def get_agent(workspace_id: UUID, agent_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def get_agent(workspace_id: UUID, agent_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     row = await pool.fetchrow(
         "select id, name, description, status from agents where id = $1 and workspace_id = $2",
@@ -46,7 +46,7 @@ async def get_agent(workspace_id: UUID, agent_id: UUID, user_id: UUID = Depends(
 
 @router.post("", response_model=AgentOut, status_code=201)
 async def create_agent(
-    workspace_id: UUID, body: AgentCreate, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, body: AgentCreate, user_id: UUID = Depends(require_workspace_member)
 ):
     pool = await get_pool()
     row = await pool.fetchrow(

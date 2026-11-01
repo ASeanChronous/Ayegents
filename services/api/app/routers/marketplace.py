@@ -37,7 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from app.db import get_pool
-from app.deps import get_current_user_id
+from app.deps import require_workspace_member
 
 listings_router = APIRouter(prefix="/workspaces/{workspace_id}/listings", tags=["marketplace"])
 install_router = APIRouter(prefix="/workspaces/{workspace_id}/marketplace", tags=["marketplace"])
@@ -99,7 +99,7 @@ _WORKSPACE_LISTING_COLUMNS = (
 
 
 @listings_router.get("", response_model=list[WorkspaceListingOut])
-async def list_my_listings(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def list_my_listings(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     # The public GET /marketplace/listings (listings.py) only ever shows
     # status = 'published' rows -- by design, an unpublished listing has
     # nothing to browse (no spec, no required_tool_categories yet). This is
@@ -140,7 +140,7 @@ async def _require_payouts_enabled(conn, workspace_id: UUID) -> None:
 
 @listings_router.patch("/{listing_id}", response_model=WorkspaceListingOut)
 async def update_listing(
-    workspace_id: UUID, listing_id: UUID, body: ListingUpdate, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, listing_id: UUID, body: ListingUpdate, user_id: UUID = Depends(require_workspace_member)
 ):
     """Edit a listing's name/description/category -- the one thing publishing
     a new version (POST .../versions) was never meant to cover, since that
@@ -178,7 +178,7 @@ async def update_listing(
 
 
 @listings_router.post("/{listing_id}/unpublish", response_model=WorkspaceListingOut)
-async def unpublish_listing(workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def unpublish_listing(workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     """Takes a published listing off the public browse (listings.py's
     browse_listings/get_listing both filter status = 'published') without
     touching anything it already installed elsewhere -- an install already
@@ -212,7 +212,7 @@ async def unpublish_listing(workspace_id: UUID, listing_id: UUID, user_id: UUID 
 
 
 @listings_router.post("", response_model=ListingOut, status_code=201)
-async def create_listing(workspace_id: UUID, body: ListingCreate, user_id: UUID = Depends(get_current_user_id)):
+async def create_listing(workspace_id: UUID, body: ListingCreate, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     async with pool.acquire() as conn:
         if body.price_cents > 0:
@@ -379,7 +379,7 @@ class ListingVersionOut(BaseModel):
 
 @listings_router.post("/{listing_id}/versions", response_model=ListingVersionOut, status_code=201)
 async def publish_listing_version(
-    workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(require_workspace_member)
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -492,7 +492,7 @@ async def _install_agent_snapshot(conn, workspace_id: UUID, user_id: UUID, name:
 
 
 @install_router.post("/installs", response_model=InstallOut, status_code=201)
-async def install_listing(workspace_id: UUID, body: InstallCreate, user_id: UUID = Depends(get_current_user_id)):
+async def install_listing(workspace_id: UUID, body: InstallCreate, user_id: UUID = Depends(require_workspace_member)):
     pool = await get_pool()
     async with pool.acquire() as conn:
         listing = await conn.fetchrow(
@@ -620,7 +620,7 @@ class InstallHistoryItemOut(BaseModel):
 
 
 @install_router.get("/installs", response_model=list[InstallHistoryItemOut])
-async def list_installs(workspace_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def list_installs(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     """This workspace's install history (docs/05-frontend-marketplace.md §1's
     deferred "installs/library history page") -- what's been installed here
     and which listing it came from. The installed agent/flow already shows up
@@ -657,7 +657,7 @@ class MyReviewOut(BaseModel):
 
 
 @install_router.get("/listings/{listing_id}/review", response_model=MyReviewOut | None)
-async def get_my_review(workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(get_current_user_id)):
+async def get_my_review(workspace_id: UUID, listing_id: UUID, user_id: UUID = Depends(require_workspace_member)):
     """This workspace's own review of a listing, if any -- lets the frontend
     tell "leave a review" from "edit your review" apart and prefill the form,
     without the caller having to scan the full public list for its own row."""
@@ -672,7 +672,7 @@ async def get_my_review(workspace_id: UUID, listing_id: UUID, user_id: UUID = De
 
 @install_router.put("/listings/{listing_id}/review", response_model=MyReviewOut)
 async def upsert_review(
-    workspace_id: UUID, listing_id: UUID, body: ReviewUpsert, user_id: UUID = Depends(get_current_user_id)
+    workspace_id: UUID, listing_id: UUID, body: ReviewUpsert, user_id: UUID = Depends(require_workspace_member)
 ):
     """Create or edit this workspace's review of a listing -- one row per
     (listing, workspace) (listing_reviews' own unique constraint), so a
