@@ -299,6 +299,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspace_id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Usage */
+        get: operations["get_usage_workspaces__workspace_id__usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/marketplace/listings": {
         parameters: {
             query?: never;
@@ -1492,6 +1509,31 @@ export interface components {
             /** On Status */
             on_status?: ("succeeded" | "failed" | "budget_exceeded") | null;
         };
+        /** UsageOut */
+        UsageOut: {
+            /** Plan Tier */
+            plan_tier: string;
+            /** Max Steps Per Run */
+            max_steps_per_run: number;
+            /** Max Tokens Per Run */
+            max_tokens_per_run: number;
+            /** Max Wall Clock Seconds */
+            max_wall_clock_seconds: number;
+            /** Max Concurrent Runs */
+            max_concurrent_runs: number;
+            /** Max Runs Per Day */
+            max_runs_per_day: number;
+            /** Runs Today */
+            runs_today: number;
+            /** Concurrent Running */
+            concurrent_running: number;
+            /** Cost Today Usd */
+            cost_today_usd: number;
+            /** Cost This Month Usd */
+            cost_this_month_usd: number;
+            /** Budget Exceeded Today */
+            budget_exceeded_today: number;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -2406,6 +2448,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunStepOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_usage_workspaces__workspace_id__usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageOut"];
                 };
             };
             /** @description Validation Error */
