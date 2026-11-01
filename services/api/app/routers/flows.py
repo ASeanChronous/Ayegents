@@ -22,11 +22,24 @@ class FlowOut(BaseModel):
 
 
 @router.get("", response_model=list[FlowOut])
-async def list_flows(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
+async def list_flows(
+    workspace_id: UUID,
+    include_archived: bool = False,
+    user_id: UUID = Depends(require_workspace_member),
+):
+    # Same reasoning as agents.py's list_agents: every picker that offers "which flow"
+    # (the run start drawer, the marketplace publish source picker) reuses this endpoint,
+    # so excluding archived by default here keeps an archived flow out of all of them at
+    # once. The "Show archived" toggle on this list passes include_archived=true.
     pool = await get_pool()
     rows = await pool.fetch(
-        "select id, name, status from flows where workspace_id = $1 order by created_at desc",
+        """
+        select id, name, status from flows
+        where workspace_id = $1 and ($2 or status != 'archived')
+        order by created_at desc
+        """,
         workspace_id,
+        include_archived,
     )
     return [FlowOut(**dict(r)) for r in rows]
 
@@ -57,6 +70,40 @@ async def create_flow(workspace_id: UUID, body: FlowCreate, user_id: UUID = Depe
         body.name,
         user_id,
     )
+    return FlowOut(**dict(row))
+
+
+class FlowUpdate(BaseModel):
+    name: str | None = None
+    status: str | None = None
+
+
+@router.patch("/{flow_id}", response_model=FlowOut)
+async def update_flow(
+    workspace_id: UUID, flow_id: UUID, body: FlowUpdate, user_id: UUID = Depends(require_workspace_member)
+):
+    """Rename a flow, or archive/unarchive it -- same shape and reasoning as
+    agents.py's update_agent, see its docstring."""
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="no fields to update")
+    if "status" in updates and updates["status"] not in ("draft", "published", "archived"):
+        raise HTTPException(status_code=400, detail="status must be one of: draft, published, archived")
+
+    pool = await get_pool()
+    set_clauses = [f"{key} = ${i}" for i, key in enumerate(updates, start=1)]
+    row = await pool.fetchrow(
+        f"""
+        update flows set {", ".join(set_clauses)}, updated_at = now()
+        where id = ${len(updates) + 1} and workspace_id = ${len(updates) + 2}
+        returning id, name, status
+        """,
+        *updates.values(),
+        flow_id,
+        workspace_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="flow not found")
     return FlowOut(**dict(row))
 
 

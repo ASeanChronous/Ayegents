@@ -71,7 +71,16 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Agent
+         * @description Rename/re-describe an agent, or archive/unarchive it -- the `status`
+         *     column (publish_status: draft/published/archived) has existed since the first
+         *     migration but nothing ever wrote to it after creation. Archiving doesn't delete
+         *     anything (agent_versions, run_steps, and any listing snapshot all still reference
+         *     this row) -- same "archived, never deleted" posture a marketplace listing's own
+         *     unpublish already uses, for the same reason: history keeps referencing it.
+         */
+        patch: operations["update_agent_workspaces__workspace_id__agents__agent_id__patch"];
         trace?: never;
     };
     "/workspaces/{workspace_id}/agents/{agent_id}/versions": {
@@ -124,7 +133,12 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Flow
+         * @description Rename a flow, or archive/unarchive it -- same shape and reasoning as
+         *     agents.py's update_agent, see its docstring.
+         */
+        patch: operations["update_flow_workspaces__workspace_id__flows__flow_id__patch"];
         trace?: never;
     };
     "/workspaces/{workspace_id}/flows/{flow_id}/versions": {
@@ -823,6 +837,15 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** AgentUpdate */
+        AgentUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Status */
+            status?: string | null;
+        };
         /** AgentVersionCreate */
         AgentVersionCreate: {
             /** System Prompt */
@@ -984,6 +1007,13 @@ export interface components {
             nodes: components["schemas"]["FlowNode"][];
             /** Edges */
             edges: components["schemas"]["FlowEdge"][];
+        };
+        /** FlowUpdate */
+        FlowUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Status */
+            status?: string | null;
         };
         /** FlowVersionCreate */
         FlowVersionCreate: {
@@ -1729,7 +1759,9 @@ export interface operations {
     };
     list_agents_workspaces__workspace_id__agents_get: {
         parameters: {
-            query?: never;
+            query?: {
+                include_archived?: boolean;
+            };
             header?: never;
             path: {
                 workspace_id: string;
@@ -1825,6 +1857,42 @@ export interface operations {
             };
         };
     };
+    update_agent_workspaces__workspace_id__agents__agent_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_agent_versions_workspaces__workspace_id__agents__agent_id__versions_get: {
         parameters: {
             query?: never;
@@ -1895,7 +1963,9 @@ export interface operations {
     };
     list_flows_workspaces__workspace_id__flows_get: {
         parameters: {
-            query?: never;
+            query?: {
+                include_archived?: boolean;
+            };
             header?: never;
             path: {
                 workspace_id: string;
@@ -1970,6 +2040,42 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlowOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_flow_workspaces__workspace_id__flows__flow_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                flow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FlowUpdate"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

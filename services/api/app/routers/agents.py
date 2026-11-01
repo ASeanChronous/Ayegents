@@ -22,11 +22,27 @@ class AgentOut(BaseModel):
 
 
 @router.get("", response_model=list[AgentOut])
-async def list_agents(workspace_id: UUID, user_id: UUID = Depends(require_workspace_member)):
+async def list_agents(
+    workspace_id: UUID,
+    include_archived: bool = False,
+    user_id: UUID = Depends(require_workspace_member),
+):
+    # Every picker in this app that offers "which agent" (the run start drawer, a flow
+    # canvas's agent node, the agent-as-tool sub-agent checklist, the marketplace publish
+    # source picker) reuses this exact endpoint rather than having its own query -- so
+    # excluding archived by default here is the entire fix for keeping an archived agent
+    # out of every one of those, with nothing to change at each call site. The one caller
+    # that needs archived agents back (this list's own "Show archived" toggle, to unarchive
+    # one) passes include_archived=true explicitly.
     pool = await get_pool()
     rows = await pool.fetch(
-        "select id, name, description, status from agents where workspace_id = $1 order by created_at desc",
+        """
+        select id, name, description, status from agents
+        where workspace_id = $1 and ($2 or status != 'archived')
+        order by created_at desc
+        """,
         workspace_id,
+        include_archived,
     )
     return [AgentOut(**dict(r)) for r in rows]
 
@@ -60,4 +76,44 @@ async def create_agent(
         body.description,
         user_id,
     )
+    return AgentOut(**dict(row))
+
+
+class AgentUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    status: str | None = None
+
+
+@router.patch("/{agent_id}", response_model=AgentOut)
+async def update_agent(
+    workspace_id: UUID, agent_id: UUID, body: AgentUpdate, user_id: UUID = Depends(require_workspace_member)
+):
+    """Rename/re-describe an agent, or archive/unarchive it -- the `status`
+    column (publish_status: draft/published/archived) has existed since the first
+    migration but nothing ever wrote to it after creation. Archiving doesn't delete
+    anything (agent_versions, run_steps, and any listing snapshot all still reference
+    this row) -- same "archived, never deleted" posture a marketplace listing's own
+    unpublish already uses, for the same reason: history keeps referencing it.
+    """
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="no fields to update")
+    if "status" in updates and updates["status"] not in ("draft", "published", "archived"):
+        raise HTTPException(status_code=400, detail="status must be one of: draft, published, archived")
+
+    pool = await get_pool()
+    set_clauses = [f"{key} = ${i}" for i, key in enumerate(updates, start=1)]
+    row = await pool.fetchrow(
+        f"""
+        update agents set {", ".join(set_clauses)}, updated_at = now()
+        where id = ${len(updates) + 1} and workspace_id = ${len(updates) + 2}
+        returning id, name, description, status
+        """,
+        *updates.values(),
+        agent_id,
+        workspace_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="agent not found")
     return AgentOut(**dict(row))
