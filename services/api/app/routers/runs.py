@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from app.config import settings
 from app.db import get_pool
 from app.deps import require_workspace_member
+from app.limits import enforce_daily_run_budget
 from app.routers.flows import FlowSpec
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/runs", tags=["runs"])
@@ -114,35 +115,7 @@ async def create_run(
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # plan_tier_limits.max_runs_per_day was declared since the first migration and
-            # never checked anywhere -- under the platform-subsidized flat-tier cost model
-            # (architecture doc §9a/§12.2: the platform pays the Anthropic bill, not the
-            # workspace), this is the one budget that bounds total daily spend rather than
-            # a single run's, so leaving it unchecked meant a workspace could create an
-            # unbounded number of runs in a day with nothing stopping it short of whatever
-            # the other four budgets cost per run. Rolling 24h window, not calendar day --
-            # simpler than tracking a reset boundary and matches what "N runs per day"
-            # actually protects against (sustained volume), not a specific wall-clock date.
-            run_count = await conn.fetchval(
-                """
-                select count(*) from runs
-                where workspace_id = $1 and created_at > now() - interval '24 hours'
-                """,
-                workspace_id,
-            )
-            limit = await conn.fetchval(
-                """
-                select l.max_runs_per_day from plan_tier_limits l
-                join workspaces w on w.plan_tier = l.plan_tier
-                where w.id = $1
-                """,
-                workspace_id,
-            )
-            if run_count >= limit:
-                raise HTTPException(
-                    status_code=429,
-                    detail=f"this workspace's plan allows {limit} runs per day — try again later or upgrade",
-                )
+            await enforce_daily_run_budget(conn, workspace_id)
 
             run = await conn.fetchrow(
                 """

@@ -30,6 +30,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.db import get_pool
+from app.limits import enforce_daily_run_budget
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -74,6 +75,14 @@ async def fire_webhook(
             run_input = {}
 
         async with conn.transaction():
+            # Same cap as POST /workspaces/{workspace_id}/runs (app/limits.py) -- without
+            # this, a workspace could blow straight past its plan's daily run budget for
+            # free just by firing this webhook instead of using the Runs UI. Raising here
+            # is fine for this one: unlike the secret check above, it only runs *after*
+            # that check already passed, so a 429 reveals nothing a valid caller didn't
+            # already know.
+            await enforce_daily_run_budget(conn, trigger["workspace_id"])
+
             run = await conn.fetchrow(
                 """
                 insert into runs (workspace_id, flow_id, trigger_id, input, status)
@@ -135,6 +144,18 @@ async def fire_telegram_webhook(
         run_input = {"message": message["text"], "telegram_chat_id": message["chat"]["id"]}
 
         async with conn.transaction():
+            # Same daily cap as the generic webhook above (app/limits.py) -- but unlike
+            # that one, this must still ack with 200 rather than raise: Telegram retries
+            # a delivery that doesn't get a prompt 200, and the budget won't have cleared
+            # by the next retry, so raising here would just mean Telegram hammering this
+            # endpoint until its own retry budget runs out. Same "ack an uninteresting
+            # update, don't error" posture already used above for a disabled trigger or a
+            # non-text update.
+            try:
+                await enforce_daily_run_budget(conn, trigger["workspace_id"])
+            except HTTPException:
+                return {"ok": True}
+
             run = await conn.fetchrow(
                 """
                 insert into runs (workspace_id, flow_id, trigger_id, input, status)
@@ -235,6 +256,13 @@ async def fire_slack_webhook(
         run_input = {"message": event["text"], "slack_channel": event["channel"]}
 
         async with conn.transaction():
+            # Same ack-don't-error posture as the Telegram handler above, same reason:
+            # Slack retries an un-200'd delivery too.
+            try:
+                await enforce_daily_run_budget(conn, trigger["workspace_id"])
+            except HTTPException:
+                return {"ok": True}
+
             run = await conn.fetchrow(
                 """
                 insert into runs (workspace_id, flow_id, trigger_id, input, status)
