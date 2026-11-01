@@ -146,6 +146,8 @@ async def run_flow(
             spec=spec,
             initial_input=run["input"],
             max_steps_per_agent_node=limits["max_steps_per_run"],
+            max_tokens_per_agent_node=limits["max_tokens_per_run"],
+            max_wall_clock_seconds=limits["max_wall_clock_seconds"],
         )
         async with pool.acquire() as conn:
             await conn.execute(
@@ -214,6 +216,8 @@ async def execute_flow(
     spec: dict,
     initial_input: dict,
     max_steps_per_agent_node: int,
+    max_tokens_per_agent_node: int,
+    max_wall_clock_seconds: int,
 ) -> FlowState:
     nodes = {n["id"]: n for n in spec.get("nodes", [])}
     edges = spec.get("edges", [])
@@ -238,6 +242,8 @@ async def execute_flow(
                 run_id=run_id,
                 initial_input=initial_input,
                 max_steps=max_steps_per_agent_node,
+                max_tokens_budget=max_tokens_per_agent_node,
+                max_wall_clock_seconds=max_wall_clock_seconds,
             ),
         )
 
@@ -389,7 +395,7 @@ def _eval_condition(condition: str, state: FlowState) -> bool:
     return not result if negate else result
 
 
-def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps):
+def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps, max_tokens_budget, max_wall_clock_seconds):
     node_type = node["type"]
 
     if node_type == "trigger":
@@ -421,6 +427,8 @@ def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps)
                     agent_version=agent_version,
                     messages=[{"role": "user", "content": message}],
                     max_steps=agent_version["max_steps"] or max_steps,
+                    max_tokens_budget=agent_version["max_tokens"] or max_tokens_budget,
+                    max_wall_clock_seconds=max_wall_clock_seconds,
                     depth=0,
                     node_id=node["id"],
                 )

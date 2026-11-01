@@ -63,12 +63,29 @@ async def _init_connection(conn: asyncpg.Connection) -> None:
 async def claim_next_run(pool: asyncpg.Pool) -> asyncpg.Record | None:
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # plan_tier_limits.max_concurrent_runs was declared since the first migration
+            # and never enforced anywhere -- this queue was globally FIFO with no per-
+            # workspace cap, so one workspace launching many runs at once could starve
+            # every other workspace's queue *and* run up Anthropic spend with nothing
+            # bounding how many of its own runs were active simultaneously (architecture
+            # doc §7's "run budgets ... enforced per workspace tier" claim). The
+            # correlated subquery excludes a candidate row outright rather than claiming
+            # it and failing later -- a workspace at its cap is simply skipped, and the
+            # next-earliest *eligible* row (from any workspace) wins instead, so being at
+            # capacity delays that workspace's own queue without blocking anyone else's.
             row = await conn.fetchrow(
                 """
-                select run_id from run_queue
-                where locked_at is null
-                order by enqueued_at
-                for update skip locked
+                select rq.run_id from run_queue rq
+                join runs r on r.id = rq.run_id
+                join workspaces w on w.id = r.workspace_id
+                join plan_tier_limits l on l.plan_tier = w.plan_tier
+                where rq.locked_at is null
+                  and (
+                    select count(*) from runs r2
+                    where r2.workspace_id = r.workspace_id and r2.status = 'running'
+                  ) < l.max_concurrent_runs
+                order by rq.enqueued_at
+                for update of rq skip locked
                 limit 1
                 """
             )

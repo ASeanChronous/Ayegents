@@ -41,6 +41,7 @@ async def run_single_agent(conn: asyncpg.Connection, run_id: UUID) -> None:
         run["workspace_id"],
     )
     max_steps = agent_version["max_steps"] or limits["max_steps_per_run"]
+    max_tokens_budget = agent_version["max_tokens"] or limits["max_tokens_per_run"]
 
     await conn.execute(
         "update runs set status = 'running', started_at = now() where id = $1", run_id
@@ -54,6 +55,8 @@ async def run_single_agent(conn: asyncpg.Connection, run_id: UUID) -> None:
         agent_version=agent_version,
         messages=[{"role": "user", "content": run["input"].get("message", "")}],
         max_steps=max_steps,
+        max_tokens_budget=max_tokens_budget,
+        max_wall_clock_seconds=limits["max_wall_clock_seconds"],
         depth=0,
     )
 
@@ -99,6 +102,7 @@ async def run_agent_as_tool(
         run["workspace_id"],
     )
     max_steps = agent_version["max_steps"] or limits["max_steps_per_run"]
+    max_tokens_budget = agent_version["max_tokens"] or limits["max_tokens_per_run"]
 
     message = tool_input.get("message") or tool_input.get("input") or str(tool_input)
     status, output, _tokens = await _execute_agent_loop(
@@ -108,6 +112,8 @@ async def run_agent_as_tool(
         agent_version=agent_version,
         messages=[{"role": "user", "content": message}],
         max_steps=max_steps,
+        max_tokens_budget=max_tokens_budget,
+        max_wall_clock_seconds=limits["max_wall_clock_seconds"],
         depth=depth,
     )
     if status != "succeeded":
@@ -172,6 +178,8 @@ async def _execute_agent_loop(
     agent_version: asyncpg.Record,
     messages: list[dict],
     max_steps: int,
+    max_tokens_budget: int,
+    max_wall_clock_seconds: int,
     depth: int,
     node_id: str | None = None,
 ) -> tuple[str, dict, int]:
@@ -187,9 +195,26 @@ async def _execute_agent_loop(
     ]
     tools_by_key = {t["key"]: t for t in tool_rows}
     total_tokens = 0
+    # plan_tier_limits carried max_tokens_per_run/max_wall_clock_seconds/max_concurrent_runs/
+    # max_runs_per_day since the very first migration, and architecture doc §7 claimed all
+    # five budgets were "enforced per workspace tier ... hard-stop with a logged reason" --
+    # but only max_steps_per_run was ever actually checked anywhere. Under the
+    # platform-subsidized flat-tier cost model (§9a/§12.2: the platform pays the Anthropic
+    # bill, not the workspace), these budgets ARE the margin-protection mechanism, so an
+    # unenforced token/wall-clock cap is a real cost-overrun exposure, not just a cosmetic
+    # gap -- a single run with large per-step outputs, or one stuck in a long tool-use loop,
+    # had nothing bounding its actual token spend or duration short of max_steps alone.
+    # Deadline computed once per agent *call*, not once per run: an agent-as-tool delegation
+    # already gets its own fresh max_steps budget per call (run_agent_as_tool, same
+    # pre-existing pattern this follows rather than redesigns) -- a wall-clock/token budget
+    # that reset per call instead of accumulating across an entire delegation tree matches
+    # that existing scoping decision, not a new inconsistency.
+    deadline = time.monotonic() + max_wall_clock_seconds
 
     try:
         for _ in range(max_steps):
+            if time.monotonic() >= deadline:
+                return "budget_exceeded", {"text": None}, total_tokens
             # Two clocks, deliberately: time.monotonic() for latency_ms (immune to
             # system clock adjustments, which matter for a duration measurement but
             # not for the wall-clock timestamps below), datetime.now() for
@@ -254,6 +279,13 @@ async def _execute_agent_loop(
                     block.text for block in response.content if block.type == "text"
                 )
                 return "succeeded", {"text": final_text}, total_tokens
+
+            if total_tokens >= max_tokens_budget:
+                # Checked here, not before the call -- the step that pushed the run over
+                # budget is still logged (same shape as max_steps: a run that exhausts its
+                # step budget still has every step it actually took in run_steps), it just
+                # doesn't get a next one.
+                return "budget_exceeded", {"text": None}, total_tokens
 
             tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
             tool_results = []
