@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db import close_pool
-from app.routers import agent_versions, agents, flows, listings, marketplace, payments, runs, tools, triggers, webhooks, workspaces
+from app.routers import agent_versions, agents, flows, listings, marketplace, members, payments, runs, tools, triggers, webhooks, workspaces
 
 app = FastAPI(title="Agent Ecosystem API")
 
@@ -27,6 +27,9 @@ app.include_router(marketplace.listings_router)
 app.include_router(marketplace.install_router)
 app.include_router(payments.checkout_router)
 app.include_router(payments.payouts_router)
+app.include_router(members.members_router)
+app.include_router(members.invites_router)
+app.include_router(members.public_invites_router)
 # Public, unauthenticated -- see webhooks.py's/payments.py's own docstrings.
 # Order matters here: FastAPI matches routes in registration order, and
 # webhooks.router's POST /webhooks/{trigger_id} is a path parameter that

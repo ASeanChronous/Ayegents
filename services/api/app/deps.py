@@ -58,3 +58,27 @@ async def require_workspace_member(
     if row is None:
         raise HTTPException(status_code=404, detail="workspace not found")
     return user_id
+
+
+async def require_workspace_admin(
+    workspace_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+) -> UUID:
+    """Like `require_workspace_member`, but for the first routes in this API that gate on
+    *which* role a member has rather than just membership itself (routers/members.py:
+    changing a member's role, removing one, and managing invites). Still 404 for a
+    non-member -- the same existence-hiding reason `require_workspace_member` does -- but
+    403 for a real member who just isn't an owner/admin, since at that point the caller
+    has already proven they belong to this workspace; there's nothing left to hide.
+    """
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "select role from workspace_members where workspace_id = $1 and user_id = $2",
+        workspace_id,
+        user_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="workspace not found")
+    if row["role"] not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="owner or admin role required")
+    return user_id
