@@ -181,6 +181,21 @@ async def _dispatch_code_exec(tool: asyncpg.Record, config: dict, tool_input: di
         # wildcard pattern is passed through as-is and almost certainly
         # won't match anything — list exact hostnames for code_exec tools.
         create_kwargs["network"] = {"allow_out": list(allowed_hosts)}
+    else:
+        # architecture doc §7 promises code_exec sandboxes run "with no network by
+        # default" -- but omitting `network` entirely is NOT that: E2B's own SDK docs
+        # it in exactly these words ("If allow_out is not specified, all outbound
+        # traffic is allowed"), so a code_exec tool created without allowed_hosts (the
+        # common case -- it's an optional, opt-in field) was silently getting full,
+        # unrestricted internet access from whatever code the model generated, the
+        # opposite of the documented security model. deny_out with a catch-all is how
+        # E2B itself documents blocking all egress; an empty allow_out wouldn't
+        # unambiguously mean the same thing. http tools keep their own, deliberately
+        # different "None = unrestricted" default (_check_host_allowed above) --
+        # that's a target the tool's own config.url already names, not arbitrary
+        # generated code with no fixed destination, so there's no "no network by
+        # default" promise to keep there in the first place.
+        create_kwargs["network"] = {"deny_out": lambda ctx: [ctx.all_traffic]}
 
     sandbox = await AsyncSandbox.create(**create_kwargs)
     try:
