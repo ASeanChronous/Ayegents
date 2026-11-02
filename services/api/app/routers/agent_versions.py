@@ -159,6 +159,30 @@ async def create_agent_version(
                     status_code=404, detail=f"sub-agent {sub_agent_id} not found in this workspace"
                 )
 
+        # body.tools is a separate attachment path from sub_agent_ids above, and unlike
+        # that one, nothing here ever checked that each tool_id actually belongs to this
+        # workspace (or is a global builtin, workspace_id is null -- same scoping
+        # list_tools/tools.py already uses) before inserting it into
+        # agent_version_tools. tools.kind includes 'agent' (migration 0001), and a tool
+        # of that kind is dispatched purely off its own config.sub_agent_id
+        # (tool_gateway.py / executor.py's run_agent_as_tool) -- so a workspace member
+        # could create their own kind='agent' tool (tools.py's create_tool takes `kind`
+        # as a plain string, no extra permission needed) with config.sub_agent_id
+        # naming *any* agent in *any* workspace, attach it here, and run it, bypassing
+        # the sub_agent_ids path's check entirely. Same bypass works for any other
+        # workspace's tool too (an http tool's fixed URL, say), not just 'agent' ones --
+        # this check closes all of it in one place, not just the agent-delegation case.
+        for tool in body.tools:
+            owned = await conn.fetchval(
+                "select id from tools where id = $1 and (workspace_id is null or workspace_id = $2)",
+                tool.tool_id,
+                workspace_id,
+            )
+            if owned is None:
+                raise HTTPException(
+                    status_code=404, detail=f"tool {tool.tool_id} not found in this workspace"
+                )
+
         async with conn.transaction():
             next_version = await conn.fetchval(
                 "select coalesce(max(version), 0) + 1 from agent_versions where agent_id = $1",

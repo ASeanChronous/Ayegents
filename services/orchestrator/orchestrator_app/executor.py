@@ -92,6 +92,23 @@ async def run_agent_as_tool(
     synchronous call, not a separate Run) — steps are logged under the same
     run_id so the whole delegation chain shows up in one inspector view."""
     run = await conn.fetchrow("select workspace_id from runs where id = $1", parent_run_id)
+
+    # routers/agent_versions.py's create_agent_version checks this for the normal
+    # sub_agent_ids path (_ensure_subagent_tool only ever builds a tool pointing at
+    # an agent already confirmed to be in the same workspace) -- but body.tools lets
+    # the same endpoint attach *any* tool_id, including a hand-made kind='agent' tool
+    # whose config.sub_agent_id names an agent in a workspace the caller was never a
+    # member of, with no validation at attach time. Checking workspace membership
+    # again here, at the one place every kind='agent' dispatch actually goes through
+    # regardless of how the tool got attached, closes that gap for good rather than
+    # only at the one call site that happened to go through _ensure_subagent_tool --
+    # without it, any workspace member could run an arbitrary other workspace's agent
+    # (its system prompt, its own tools) under their own run just by guessing or
+    # finding its agent id, and read back whatever it produced.
+    sub_agent = await conn.fetchrow("select workspace_id from agents where id = $1", sub_agent_id)
+    if sub_agent is None or sub_agent["workspace_id"] != run["workspace_id"]:
+        raise ToolDispatchError(f"sub-agent {sub_agent_id} not found in this workspace")
+
     agent_version = await _load_current_version(conn, sub_agent_id)
     limits = await conn.fetchrow(
         """
