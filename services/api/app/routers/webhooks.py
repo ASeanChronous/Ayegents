@@ -54,11 +54,16 @@ async def fire_webhook(
         # Same 404 whether the trigger doesn't exist, isn't a webhook, or the
         # secret is wrong -- a 403/401 would confirm a guessed trigger_id is
         # real even without the secret, which a public endpoint shouldn't leak.
+        # compare_digest, not `!=` -- same reason fire_slack_webhook's HMAC check
+        # below already uses it: a naive `!=` short-circuits on the first
+        # mismatched byte, so its timing leaks how many leading characters of a
+        # guess were right, letting an attacker recover the secret byte-by-byte
+        # over repeated requests instead of needing the whole thing in one try.
         if (
             trigger is None
             or trigger["kind"] != "webhook"
             or not x_webhook_secret
-            or x_webhook_secret != trigger["config"].get("secret")
+            or not hmac.compare_digest(x_webhook_secret, trigger["config"].get("secret") or "")
         ):
             raise HTTPException(status_code=404, detail="not found")
         if not trigger["enabled"]:
@@ -115,12 +120,17 @@ async def fire_telegram_webhook(
             """,
             trigger_id,
         )
-        # Same 404-for-everything posture as fire_webhook above, same reason.
+        # Same 404-for-everything posture as fire_webhook above, same reason --
+        # and same compare_digest fix, same reason (a timing side-channel on a
+        # bot-controlled secret token is no less exploitable than on the
+        # generic webhook's).
         if (
             trigger is None
             or trigger["kind"] != "telegram"
             or not x_telegram_bot_api_secret_token
-            or x_telegram_bot_api_secret_token != trigger["config"].get("webhook_secret")
+            or not hmac.compare_digest(
+                x_telegram_bot_api_secret_token, trigger["config"].get("webhook_secret") or ""
+            )
         ):
             raise HTTPException(status_code=404, detail="not found")
 
