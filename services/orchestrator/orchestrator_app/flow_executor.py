@@ -416,6 +416,18 @@ def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps,
             # parallel branches rather than only sequential ones.
             async with pool.acquire() as conn:
                 agent_id = UUID(node["agent_id"])
+                # §20's cross-workspace agent-delegation gap (executor.py's
+                # run_agent_as_tool) had a twin here: this node's agent_id comes
+                # straight from the flow spec (routers/flows.py's create_flow_version
+                # deliberately leaves per-node-type field validation to run time, see
+                # its own comment), and nothing here ever checked it names an agent in
+                # *this* workspace before running it -- a flow referencing another
+                # workspace's agent_id would run that agent's system prompt and tools
+                # under this run, same exposure §20 closed for the agent-as-tool path,
+                # just reachable without even needing to craft a tool row first.
+                owning_workspace = await conn.fetchval("select workspace_id from agents where id = $1", agent_id)
+                if owning_workspace != workspace_id:
+                    raise FlowExecutionError(f"node {node['id']!r}: agent {agent_id} not found in this workspace")
                 agent_version = await _load_current_version(conn, agent_id)
                 if agent_version is None:
                     raise FlowExecutionError(f"node {node['id']!r}: agent {agent_id} has no version")
@@ -449,7 +461,21 @@ def _make_node_fn(node, *, pool, workspace_id, run_id, initial_input, max_steps,
         async def node_fn(state):
             async with pool.acquire() as conn:
                 tool_id = UUID(node["tool_id"])
-                tool = await conn.fetchrow("select * from tools where id = $1", tool_id)
+                # Same gap as the agent node above, same reason: tool_id comes straight
+                # from the flow spec with no ownership check. Scoped the same way
+                # tools.py::list_tools already does (a global builtin, workspace_id is
+                # null, or a tool this workspace itself created) -- this doesn't leak a
+                # credential either way (_load_credential_secret below is already scoped
+                # by (tool_id, workspace_id), so a tool from an unrelated workspace just
+                # 404s on its own credential lookup rather than finding this workspace's),
+                # but it did let a flow use another workspace's tool definition --
+                # borrowing its allowed_hosts egress scope, for instance -- without owning
+                # it.
+                tool = await conn.fetchrow(
+                    "select * from tools where id = $1 and (workspace_id is null or workspace_id = $2)",
+                    tool_id,
+                    workspace_id,
+                )
                 if tool is None:
                     raise FlowExecutionError(f"node {node['id']!r}: tool {tool_id} not found")
                 tool_input = _resolve_input_dict(node, state, initial_input)
