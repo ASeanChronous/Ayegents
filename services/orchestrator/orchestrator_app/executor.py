@@ -31,6 +31,31 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 async def run_single_agent(conn: asyncpg.Connection, run_id: UUID) -> None:
     run = await conn.fetchrow("select * from runs where id = $1", run_id)
+
+    # routers/runs.py's create_run checks agent_id ownership before inserting
+    # the runs row -- but this is the dispatch point every runs row actually
+    # goes through regardless of how it got created, the same reasoning
+    # run_agent_as_tool's check below already follows for the agent-as-tool
+    # path. Without it, any runs row naming another workspace's agent_id
+    # (e.g. one inserted before that check existed, or by a future caller of
+    # this function that forgets it) would run that agent's system prompt
+    # and tools under this run's workspace. Fails the run the same way
+    # run_flow fails a flow with no published version, rather than raising
+    # -- an uncaught exception here would leave the run stuck at 'queued'
+    # forever (main.py's run_queue_loop only logs and keeps polling).
+    agent = await conn.fetchrow("select workspace_id from agents where id = $1", run["agent_id"])
+    if agent is None or agent["workspace_id"] != run["workspace_id"]:
+        await conn.execute(
+            """
+            update runs set status = 'failed', error = $2, finished_at = now()
+            where id = $1
+            """,
+            run_id,
+            f"agent {run['agent_id']} not found in this workspace",
+        )
+        await notify_run(conn, run_id)
+        return
+
     agent_version = await _load_current_version(conn, run["agent_id"])
     limits = await conn.fetchrow(
         """

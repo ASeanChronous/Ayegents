@@ -114,6 +114,23 @@ async def create_run(
 
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # The orchestrator's own dispatch-time checks (run_single_agent,
+        # run_flow) are the real fix -- see their comments -- but this is
+        # the one path that lets a caller set agent_id/flow_id directly from
+        # request input with no prior validation at all (every other
+        # creator of a runs row, webhooks.py/scheduler.py/agent_event.py,
+        # derives flow_id from a trigger row already scoped to this
+        # workspace), so check here too for an immediate 404 over a run that
+        # would only fail once the orchestrator picks it up.
+        if body.agent_id is not None:
+            owner = await conn.fetchval("select workspace_id from agents where id = $1", body.agent_id)
+            if owner != workspace_id:
+                raise HTTPException(status_code=404, detail=f"agent {body.agent_id} not found in this workspace")
+        if body.flow_id is not None:
+            owner = await conn.fetchval("select workspace_id from flows where id = $1", body.flow_id)
+            if owner != workspace_id:
+                raise HTTPException(status_code=404, detail=f"flow {body.flow_id} not found in this workspace")
+
         async with conn.transaction():
             await enforce_daily_run_budget(conn, workspace_id)
 

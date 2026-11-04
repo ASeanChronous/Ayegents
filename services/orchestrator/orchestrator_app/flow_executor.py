@@ -75,6 +75,30 @@ async def run_flow(
 ) -> None:
     async with pool.acquire() as conn:
         run = await conn.fetchrow("select * from runs where id = $1", run_id)
+
+        # routers/runs.py's create_run checks flow_id ownership before inserting
+        # the runs row -- but this is the dispatch point every runs row actually
+        # goes through, the same reasoning _make_node_fn's agent/tool checks
+        # already follow one layer deeper for the nodes *inside* a flow. Without
+        # it, a runs row naming another workspace's flow_id would resolve and
+        # run that flow's own nodes under this run's workspace -- and a flow
+        # made only of conditional/merge/trigger nodes carries no agent_id/
+        # tool_id for the node-level checks to catch at all, so this is the
+        # only check that would stop it. Fails the run the same way a flow
+        # with no published version already does, rather than raising.
+        flow_owner = await conn.fetchval("select workspace_id from flows where id = $1", run["flow_id"])
+        if flow_owner != run["workspace_id"]:
+            await conn.execute(
+                """
+                update runs set status = 'failed', error = $2, finished_at = now()
+                where id = $1
+                """,
+                run_id,
+                f"flow {run['flow_id']} not found in this workspace",
+            )
+            await notify_run(conn, run_id)
+            return
+
         if run["draft_spec"] is not None:
             # A true draft dry-run (docs/04-frontend-builder.md §10): the
             # canvas's own nodes/edges, handed straight to execute_flow below
