@@ -15,6 +15,13 @@ the first place in this API anything gates on *which* role a member has, not jus
 they're a member at all. Every one of them also protects the workspace's last owner: a
 workspace with zero owners could never again have anyone promoted, demoted, or removed,
 since every one of those actions requires being an owner or admin in the first place.
+
+Promoting someone *to* owner (directly via a role update, or by inviting them straight to
+it) is further restricted to existing owners -- an admin can manage members day-to-day,
+but minting a new owner, including themselves, is a bigger grant than that role implies.
+`update_member_role` and `create_invite` each check the caller's own role before allowing
+`role == "owner"` in the body, on top of the `require_workspace_admin` dependency both
+already use.
 """
 
 import secrets
@@ -90,6 +97,18 @@ async def update_member_role(
 
         if member["role"] == "owner" and body.role != "owner" and await _count_owners(conn, workspace_id) <= 1:
             raise HTTPException(status_code=400, detail="a workspace must keep at least one owner")
+
+        # require_workspace_admin lets an admin reach this endpoint at all, but minting a
+        # new owner is a bigger grant than "can manage members" -- only an existing owner
+        # can promote someone (including themselves) to owner.
+        if body.role == "owner":
+            caller_role = await conn.fetchval(
+                "select role from workspace_members where workspace_id = $1 and user_id = $2",
+                workspace_id,
+                admin_id,
+            )
+            if caller_role != "owner":
+                raise HTTPException(status_code=403, detail="only an owner can promote a member to owner")
 
         row = await conn.fetchrow(
             """
@@ -172,8 +191,19 @@ async def create_invite(
     if body.role not in ("owner", "admin", "member"):
         raise HTTPException(status_code=400, detail="role must be one of: owner, admin, member")
 
-    token = secrets.token_urlsafe(32)
     pool = await get_pool()
+    # Same rule as update_member_role -- an admin can manage members, but minting a new
+    # owner (even via an invite that hasn't been accepted yet) takes an existing owner.
+    if body.role == "owner":
+        caller_role = await pool.fetchval(
+            "select role from workspace_members where workspace_id = $1 and user_id = $2",
+            workspace_id,
+            admin_id,
+        )
+        if caller_role != "owner":
+            raise HTTPException(status_code=403, detail="only an owner can invite someone as owner")
+
+    token = secrets.token_urlsafe(32)
     row = await pool.fetchrow(
         """
         insert into workspace_invites (workspace_id, email, role, token, invited_by)
