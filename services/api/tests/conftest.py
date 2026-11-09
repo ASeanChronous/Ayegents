@@ -77,6 +77,7 @@ async def factory(pool):
     """
     workspace_ids: list[uuid.UUID] = []
     user_ids: list[uuid.UUID] = []
+    global_tool_ids: list[uuid.UUID] = []
 
     async def _new_user(conn, label: str) -> uuid.UUID:
         user_id = uuid.uuid4()
@@ -141,6 +142,129 @@ async def factory(pool):
                 enabled,
             )
 
+    async def tool(
+        workspace_id: uuid.UUID | None, *, kind: str = "http", key: str | None = None
+    ) -> uuid.UUID:
+        key = key or f"test-tool-{uuid.uuid4()}"
+        async with pool.acquire() as conn:
+            tool_id = await conn.fetchval(
+                "insert into tools (workspace_id, key, name, kind) values ($1, $2, $3, $4) returning id",
+                workspace_id,
+                key,
+                key,
+                kind,
+            )
+        if workspace_id is None:
+            # Not covered by any workspace's own cascade -- tracked separately for teardown.
+            global_tool_ids.append(tool_id)
+        return tool_id
+
+    async def agent_version(
+        agent_id: uuid.UUID, *, tool_ids: list[uuid.UUID] | None = None, sub_agent_ids: list[uuid.UUID] | None = None
+    ) -> uuid.UUID:
+        async with pool.acquire() as conn:
+            version_id = await conn.fetchval(
+                """
+                insert into agent_versions (agent_id, version, system_prompt)
+                values ($1, 1, 'you are a test agent')
+                returning id
+                """,
+                agent_id,
+            )
+            for tool_id in tool_ids or []:
+                await conn.execute(
+                    "insert into agent_version_tools (agent_version_id, tool_id) values ($1, $2)",
+                    version_id,
+                    tool_id,
+                )
+            for sub_agent_id in sub_agent_ids or []:
+                await conn.execute(
+                    "insert into agent_version_subagents (agent_version_id, sub_agent_id) values ($1, $2)",
+                    version_id,
+                    sub_agent_id,
+                )
+            return version_id
+
+    async def flow_version(flow_id: uuid.UUID, spec: dict) -> uuid.UUID:
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                "insert into flow_versions (flow_id, version, spec) values ($1, 1, $2) returning id",
+                flow_id,
+                spec,
+            )
+
+    async def listing(
+        workspace_id: uuid.UUID,
+        *,
+        source_agent_id: uuid.UUID | None = None,
+        source_flow_id: uuid.UUID | None = None,
+        price_cents: int = 0,
+        status: str = "draft",
+        required_tool_categories: list[str] | None = None,
+    ) -> uuid.UUID:
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                insert into listings
+                    (workspace_id, source_agent_id, source_flow_id, name, price_cents, status, required_tool_categories)
+                values ($1, $2, $3, $4, $5, $6, $7)
+                returning id
+                """,
+                workspace_id,
+                source_agent_id,
+                source_flow_id,
+                f"test-listing-{uuid.uuid4()}",
+                price_cents,
+                status,
+                required_tool_categories or [],
+            )
+
+    async def listing_version(listing_id: uuid.UUID, spec: dict) -> uuid.UUID:
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                "insert into listing_versions (listing_id, version, spec) values ($1, 1, $2) returning id",
+                listing_id,
+                spec,
+            )
+
+    async def install(
+        listing_id: uuid.UUID, listing_version_id: uuid.UUID, installing_workspace_id: uuid.UUID, installed_by: uuid.UUID
+    ) -> uuid.UUID:
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                insert into installs (listing_id, listing_version_id, installing_workspace_id, installed_by)
+                values ($1, $2, $3, $4)
+                returning id
+                """,
+                listing_id,
+                listing_version_id,
+                installing_workspace_id,
+                installed_by,
+            )
+
+    async def set_payouts_enabled(workspace_id: uuid.UUID, *, enabled: bool = True) -> None:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "update workspaces set stripe_connect_payouts_enabled = $2 where id = $1", workspace_id, enabled
+            )
+
+    async def purchase(listing_id: uuid.UUID, purchasing_workspace_id: uuid.UUID, purchased_by: uuid.UUID, *, status: str = "paid") -> uuid.UUID:
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                insert into listing_purchases
+                    (listing_id, purchasing_workspace_id, amount_cents, currency, stripe_checkout_session_id, purchased_by, status)
+                values ($1, $2, 1000, 'usd', $3, $4, $5)
+                returning id
+                """,
+                listing_id,
+                purchasing_workspace_id,
+                f"cs_test_{uuid.uuid4()}",
+                purchased_by,
+                status,
+            )
+
     async def fill_runs(workspace_id: uuid.UUID, *, flow_id: uuid.UUID, count: int) -> None:
         """Bulk-inserts `count` already-finished runs created "now" -- for pushing a
         workspace to (or past) `plan_tier_limits.max_runs_per_day` (§16/§17's rolling
@@ -151,9 +275,42 @@ async def factory(pool):
                 [(workspace_id, flow_id) for _ in range(count)],
             )
 
-    yield SimpleNamespace(workspace=workspace, agent=agent, flow=flow, trigger=trigger, fill_runs=fill_runs)
+    yield SimpleNamespace(
+        workspace=workspace,
+        agent=agent,
+        flow=flow,
+        trigger=trigger,
+        fill_runs=fill_runs,
+        tool=tool,
+        agent_version=agent_version,
+        flow_version=flow_version,
+        listing=listing,
+        listing_version=listing_version,
+        install=install,
+        set_payouts_enabled=set_payouts_enabled,
+        purchase=purchase,
+    )
 
     async with pool.acquire() as conn:
+        # installs.listing_id and listing_purchases.listing_id (0001_init_schema.sql,
+        # 0008_listing_pricing.sql) reference listings(id) with no ON DELETE CASCADE of
+        # their own -- a marketplace test installing/purchasing listing A (owned by
+        # workspace A) *from* workspace B leaves a row that outlives workspace A's own
+        # listings-cascade the moment workspace A is torn down, the same FK-ordering
+        # hazard as agent_version_tools/_subagents below, just one hop further down the
+        # publish/install chain. Cleared for every workspace up front (listings owned by
+        # *any* of this test's own workspaces), not just the one about to be deleted,
+        # since the referencing install/purchase row commonly lives in a different
+        # workspace than the listing it points at.
+        for ws_id in workspace_ids:
+            await conn.execute(
+                "delete from installs where listing_id in (select id from listings where workspace_id = $1)",
+                ws_id,
+            )
+            await conn.execute(
+                "delete from listing_purchases where listing_id in (select id from listings where workspace_id = $1)",
+                ws_id,
+            )
         for ws_id in workspace_ids:
             # agent_version_tools.tool_id and agent_version_subagents.sub_agent_id
             # (0001_init_schema.sql) reference tools(id)/agents(id) with no ON DELETE
@@ -173,5 +330,11 @@ async def factory(pool):
             )
             # Cascades away any agents/flows/runs created under it (0001_init_schema.sql).
             await conn.execute("delete from workspaces where id = $1", ws_id)
+        if global_tool_ids:
+            # Same no-cascade gap as above, but for a global (workspace_id is null)
+            # tool a marketplace-install test resolved an agent's snapshot against --
+            # nothing in the workspace-keyed cleanup above ever touches these.
+            await conn.execute("delete from agent_version_tools where tool_id = any($1::uuid[])", global_tool_ids)
+            await conn.execute("delete from tools where id = any($1::uuid[])", global_tool_ids)
         for user_id in user_ids:
             await conn.execute("delete from auth.users where id = $1", user_id)
