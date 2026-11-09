@@ -249,6 +249,17 @@ async def factory(pool):
                 "update workspaces set stripe_connect_payouts_enabled = $2 where id = $1", workspace_id, enabled
             )
 
+    async def set_stripe_connect(
+        workspace_id: uuid.UUID, *, account_id: str | None = None, payouts_enabled: bool = False
+    ) -> None:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "update workspaces set stripe_connect_account_id = $2, stripe_connect_payouts_enabled = $3 where id = $1",
+                workspace_id,
+                account_id,
+                payouts_enabled,
+            )
+
     async def purchase(listing_id: uuid.UUID, purchasing_workspace_id: uuid.UUID, purchased_by: uuid.UUID, *, status: str = "paid") -> uuid.UUID:
         async with pool.acquire() as conn:
             return await conn.fetchval(
@@ -288,6 +299,7 @@ async def factory(pool):
         listing_version=listing_version,
         install=install,
         set_payouts_enabled=set_payouts_enabled,
+        set_stripe_connect=set_stripe_connect,
         purchase=purchase,
     )
 
